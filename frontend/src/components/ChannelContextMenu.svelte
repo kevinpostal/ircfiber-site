@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, unarchiveBuffer, initiateRejoin, pruneMessagesBefore, clearMessageCache, clearUnseenHighlightsUntil } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, unarchiveBuffer, initiateRejoin, pruneMessagesBefore, clearMessageCache, clearUnseenHighlightsUntil, userPartedChannels, pendingJoinKey } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref, setClearedAt, globalPrefs } from '../stores/preferences.svelte';
   import { pinChannel, unpinChannel, updateBufferPrefs, clearBacklog as apiClearBacklog } from '../stores/api';
@@ -102,6 +102,7 @@
     if (!networkId || !buf.name) return;
     sendRaw(networkId, 'PART ' + buf.name);
     buf.isJoined = false;
+    userPartedChannels.add(pendingJoinKey(networkId, buf.name));
     onClose();
   }
   function archive(): void {

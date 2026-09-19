@@ -35,6 +35,7 @@ import {
 	isJoinPending,
 	markJoinPending,
 	clearJoinPending,
+	userPartedChannels,
 	markUserDisconnected,
 	clearUserDisconnected,
 	isUserDisconnected,
@@ -2634,6 +2635,7 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 		ircState.networks.length = 0;
 		activeJoinList.clear();
 		pendingJoins.clear();
+		userPartedChannels.clear();
 	});
 
 	describe('pendingJoins dedup', () => {
@@ -2715,6 +2717,43 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			flushSync();
 			expect(findBuf('n1', '#private')!.joinInFlight).toBe(false);
 			expect(isJoinPending('n1', '#private')).toBe(false);
+		});
+	});
+
+	// Support #11: the sync payload flattens parted channels into plain
+	// isJoined:false buffers, so auto-join needs a client-side record of
+	// "the user left this on purpose" to avoid walking them back in.
+	describe('userPartedChannels', () => {
+		function setup(): void {
+			const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+			net.buffers.push(createBuffer({ name: '#private', isJoined: true }));
+			ircState.networks.push(net);
+			flushSync();
+		}
+
+		it('self PART marks the channel and self JOIN clears it', () => {
+			setup();
+			updateChannelUsers('n1', '#private', 'PART', 'me');
+			flushSync();
+			expect(userPartedChannels.has('n1:#private')).toBe(true);
+			updateChannelUsers('n1', '#private', 'JOIN', 'me');
+			flushSync();
+			expect(userPartedChannels.has('n1:#private')).toBe(false);
+		});
+
+		it('another user parting does not mark the channel', () => {
+			setup();
+			updateChannelUsers('n1', '#private', 'PART', 'someoneelse');
+			flushSync();
+			expect(userPartedChannels.has('n1:#private')).toBe(false);
+		});
+
+		it('initiateRejoin retracts the mark', () => {
+			setup();
+			updateChannelUsers('n1', '#private', 'PART', 'me');
+			flushSync();
+			initiateRejoin('n1', '#private', { allowReconnect: false });
+			expect(userPartedChannels.has('n1:#private')).toBe(false);
 		});
 	});
 

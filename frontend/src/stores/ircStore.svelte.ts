@@ -807,6 +807,21 @@ export function clearJoinPending(networkId: string, bufferName: string): void {
   lastJoinAttemptAt.delete(key);
 }
 
+// ── Channels the user deliberately left in this session ──
+//
+// Mirrors the engine's `NetworkConfig.partedChannels`, but session-scoped:
+// the sync payload flattens parted channels into ordinary `isJoined:false`
+// buffers, so the client cannot tell "I never joined this" from "I left
+// this on purpose". Auto-join (App.svelte `maybeAutoJoinChannel`) needs
+// that distinction — without it, `/part` is undone by the next navigation
+// back to the buffer. Keyed like `pendingJoins`.
+//
+// Added on the self-PART echo, removed on the self-JOIN echo and on every
+// explicit rejoin (`initiateRejoin`). Deliberately NOT cleared by
+// `resetPendingState`: a WebSocket blip must not resurrect a channel the
+// user left.
+export const userPartedChannels: Set<string> = $state(new Set());
+
 // ── W1-T01: initiateRejoin helper ──
 //
 // Single canonical entry point for all user-initiated JOIN attempts.
@@ -922,6 +937,8 @@ export function initiateRejoin(
   prePopulateOwnNick(buf, net.currentNick);
   markJoinPending(networkId, normalized);
   recordJoin(networkId, normalized);
+  // Explicit rejoin retracts a previous deliberate PART.
+  userPartedChannels.delete(pendingJoinKey(networkId, normalized));
   sendRaw(networkId, 'JOIN ' + normalized + (opts.key ? ' ' + opts.key : ''));
 
   if (opts.allowReconnect && !net.connected) {
@@ -4162,6 +4179,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     clearNotInChannelDedup(networkId, normalized);
     // W1-T06: track user-initiated JOIN (existing buffer path)
     recordJoin(networkId, normalized);
+    userPartedChannels.delete(pendingJoinKey(networkId, normalized));
   } else if (cmd === '404') {
     // ERR_CANNOTSENDTOCHAN — "No external channel messages" etc.
     // This is the spam the user reported on #superbowl. The engine forwards
@@ -4278,6 +4296,9 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     // W1-T06: clear activeJoin tracking on self-PART
     clearActiveJoin(networkId, normalized);
     clearJoinPending(networkId, normalized);
+    // The user left on purpose (here, another tab, or another client):
+    // auto-join must not put them back. Retracted by the JOIN echo.
+    userPartedChannels.add(pendingJoinKey(networkId, normalized));
   } else if ((cmd === 'PART' || cmd === 'QUIT') && nick) {
     if (cmd === 'QUIT') {
       for (const b of net.buffers) {

@@ -3,10 +3,11 @@ import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import App from './App.svelte';
-import { ircState, updateChannelUsers, activeJoinList, setLastSeenMessage, dirtySeenEids } from './stores/ircStore.svelte';
+import { ircState, updateChannelUsers, activeJoinList, userPartedChannels, setLastSeenMessage, dirtySeenEids } from './stores/ircStore.svelte';
 import { membersCollapsedMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, pinnedMap, lastSeenMap, globalPrefs } from './stores/preferences.svelte';
 import { createNetwork, createBuffer, createMessage, createMember } from './test/factories';
 import { banListKey } from './lib/utils';
+import { getSlashHandler } from './lib/slashCommands';
 import type { BanListData } from './types';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
@@ -144,6 +145,7 @@ beforeEach(() => {
 describe('App', () => {
 	beforeEach(() => {
 		activeJoinList.clear();
+		userPartedChannels.clear();
 	});
   it('renders the app layout', async () => {
     render(App);
@@ -1197,6 +1199,83 @@ describe('App', () => {
 
       expect(ircState.overlay.type).toBeNull();
       expect(ircState.pendingBanList.size).toBe(0);
+    });
+  });
+
+  // Support #11 — "client automatically rejoins channel after /part".
+  //
+  // App polls requestSync() every 10 s (App.svelte onOpen). The sync
+  // handler calls checkRoute(), which re-resolves the *unchanged* URL
+  // through switchToBuffer → maybeAutoJoinChannel. /part leaves the
+  // parted channel active and the URL untouched, so every poll used to
+  // re-send JOIN a few seconds after the user left.
+  describe('parting a channel (support #11)', () => {
+    async function bootOnChannel(channel: string): Promise<(d: unknown) => void> {
+      const net = createNetwork({ networkId: 'netpart', name: 'PartNet', connected: true, currentNick: 'me' });
+      net.buffers.push(createBuffer({ name: channel, isJoined: true, users: [createMember({ nick: 'me' })] }));
+      ircState.networks.push(net);
+      ircState.activeBuffer.networkId = 'netpart';
+      ircState.activeBuffer.bufferName = channel;
+      history.replaceState({}, '', `/irc/PartNet/channel/${channel.slice(1)}`);
+      flushSync();
+      render(App);
+      const wsMock = connectWebSocket as unknown as { mock: { calls: Array<Array<(d: unknown) => void>> } };
+      await vi.waitFor(() => { expect(wsMock.mock.calls.length).toBeGreaterThan(0); });
+      return wsMock.mock.calls[0]![0]!;
+    }
+
+    function part(channel: string): void {
+      getSlashHandler('part')!([], 'netpart', channel, null);
+      // Server echo for our own PART.
+      updateChannelUsers('netpart', channel, 'PART', 'me');
+      flushSync();
+    }
+
+    it('a sync poll does not re-JOIN the channel the user just parted', async () => {
+      const onMessage = await bootOnChannel('#blackhole');
+      part('#blackhole');
+      vi.mocked(sendRaw).mockClear();
+
+      // The 10s poll: server answers with a sync, App re-runs checkRoute().
+      onMessage({ type: 'sync' });
+      flushSync();
+      onMessage({ type: 'sync' });
+      flushSync();
+
+      expect(vi.mocked(sendRaw)).not.toHaveBeenCalledWith('netpart', expect.stringContaining('JOIN'));
+      expect(ircState.networks[0].buffers.find(b => b.name === '#blackhole')?.isJoined).toBe(false);
+    });
+
+    it('navigating back to a parted channel does not re-JOIN it', async () => {
+      await bootOnChannel('#blackhole');
+      ircState.networks[0].buffers.push(createBuffer({ name: '#other', isJoined: true }));
+      flushSync();
+      part('#blackhole');
+      vi.mocked(sendRaw).mockClear();
+
+      await userEvent.click(page.getByRole('tab', { name: /other/ }).first());
+      flushSync();
+      await userEvent.click(page.getByRole('tab', { name: /blackhole/ }).first());
+      flushSync();
+
+      expect(vi.mocked(sendRaw)).not.toHaveBeenCalledWith('netpart', expect.stringContaining('JOIN #blackhole'));
+    });
+
+    it('an explicit rejoin still works and re-arms auto-join', async () => {
+      const onMessage = await bootOnChannel('#blackhole');
+      part('#blackhole');
+      vi.mocked(sendRaw).mockClear();
+
+      getSlashHandler('cycle')!(['#blackhole'], 'netpart', '#blackhole', null);
+      flushSync();
+      expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('netpart', 'JOIN #blackhole');
+
+      // JOIN echo lands; a later part/poll cycle behaves normally again.
+      updateChannelUsers('netpart', '#blackhole', 'JOIN', 'me');
+      flushSync();
+      onMessage({ type: 'sync' });
+      flushSync();
+      expect(ircState.networks[0].buffers.find(b => b.name === '#blackhole')?.isJoined).toBe(true);
     });
   });
 });

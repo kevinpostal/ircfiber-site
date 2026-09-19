@@ -23,7 +23,7 @@
     setActiveBuffer, updateChannelTopic,
     appendMessage, batchAppendMessages,
     handleBuffersToDelete,
-    isJoinPending, initiateRejoin,
+    isJoinPending, initiateRejoin, userPartedChannels, pendingJoinKey,
     resetPendingState,
     isUserDisconnected,
     isMessageUnseen, setLastSeenMessage, readBuffer, markAllAsRead,
@@ -801,8 +801,13 @@ let showEditNetwork: boolean = $state(false);
       setActiveBuffer(networkId, bufferName);
       requestSwitchBuffer(networkId, bufferName);
       updateRoute(networkId, bufferName);
-      maybeAutoJoinChannel(networkId, bufferName);
       if (!isSameBuffer) {
+        // Auto-join is a *navigation* affordance. Re-resolving the route we
+        // are already on is not navigation: checkRoute() runs on every 10 s
+        // sync poll, so joining from here re-joined a channel seconds after
+        // the user /part'ed it (support #11), re-joined after a kick, and
+        // retried a JOIN the server had already refused, every 10 s forever.
+        maybeAutoJoinChannel(networkId, bufferName);
         // IRCCloud-style: skip the REST round-trip during boot — the sync
         // message will deliver messages via WebSocket.  After sync arrives
         // (or for explicit user-initiated switches), loadBufferHistory
@@ -826,6 +831,10 @@ let showEditNetwork: boolean = $state(false);
   //     the Rejoin button once reconnect happens
   //   - already-pending joins — dedup via pendingJoins Set so re-renders
   //     (selectLastActiveBuffer firing repeatedly, etc.) don't spam JOIN
+  //   - channels the user deliberately left — /part, the context-menu Leave,
+  //     or a PART from another client. Walking back into the buffer to read
+  //     its scrollback must not undo the part; Rejoin, /join and typing a
+  //     message are the explicit ways back in, and all three clear the mark.
   function maybeAutoJoinChannel(networkId: string, bufferName: string): void {
     if (!bufferName || !bufferName.startsWith('#')) return;
     const normalized = normalizeChannelName(bufferName);
@@ -839,6 +848,7 @@ let showEditNetwork: boolean = $state(false);
     if (!net.connected) return;
     // Dedup: if a JOIN is already in-flight for this buffer, don't re-send.
     if (isJoinPending(networkId, normalized)) return;
+    if (userPartedChannels.has(pendingJoinKey(networkId, normalized))) return;
 
     // W1-T01: delegate to the canonical rejoin helper. allowReconnect=false
     // — URL nav must NOT kick reconnectNetwork() (would race the engine's

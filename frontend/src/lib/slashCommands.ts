@@ -2,7 +2,7 @@ import type { Network } from '../types';
 import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte.ts';
 import { reconnectNetwork, disconnectNetwork, clearBacklog } from '../stores/api';
 import { setClearedAt, archivedMap, highlightWords, addIgnore, removeIgnores } from '../stores/preferences.svelte';
-import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork, initiateRejoin, pruneMessagesBefore, clearMessageCache, requestChannelList, findBufferByName, beginConnectAttempt } from '../stores/ircStore.svelte';
+import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork, initiateRejoin, pruneMessagesBefore, clearMessageCache, requestChannelList, findBufferByName, beginConnectAttempt, userPartedChannels, pendingJoinKey } from '../stores/ircStore.svelte';
 import { normalizeChannelName, generateLabel, stripPrefix, banListKey } from './utils';
 import { updateRoute } from './routing';
 
@@ -247,7 +247,9 @@ registerSlash(['part', 'leave', 'pa', 'p', 'l'], (args, networkId, target) => {
   const reason = args[0] ? args.slice(1).join(' ') : args.join(' ');
   if (!chan || !chan.startsWith('#')) throw new Error('Not in a channel');
   sendRaw(networkId, 'PART ' + chan + (reason ? ' :' + reason : ''));
-  // Optimistically mark as parted — the server echo will confirm it
+  // Optimistically mark as parted — the server echo will confirm it. The
+  // parted mark also stops auto-join from walking the user back in.
+  userPartedChannels.add(pendingJoinKey(networkId, chan));
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (net) {
     const buf = net.buffers.find(b => b.name === chan);
