@@ -36,6 +36,12 @@
 # `kill -HUP 1`, not `pkill -x inspircd`: inspircd is the pod's PID 1 and
 # busybox pkill never matches it, so the pkill form exited 1 and failed
 # every leaf deploy that changed config (2026-09-13).
+#
+# Skipped while the Deployment is scaled to 0 (the admin K8s-leaf page owns
+# the replica count): `kubectl exec` into a deployment with no pod blocks
+# for a minute and then fails the play, with the rendered conf already on
+# the node — the next pod start reads it. Same guard as the rollout wait
+# in tasks/k8s_leaf.yml.
 - name: Rehash k8s ircd
   ansible.builtin.command:
     argv:
@@ -53,6 +59,7 @@
   delegate_to: localhost
   become: false
   changed_when: true
+  when: (ircd_k8s_desired.stdout | default('0') | int) > 0
 
 - name: Restart services
   community.docker.docker_container:
