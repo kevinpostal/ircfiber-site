@@ -3,7 +3,7 @@
   import SidebarIndicators from './SidebarIndicators.svelte';
   import { isFiberServerDown as isServerDown } from '../lib/fiberServer';
   import { archivedMap, pinnedMap, pinnedOrder, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem, globalPrefs } from '../stores/preferences.svelte';
-  import { stripHash, normalizeChannelName } from '../lib/utils';
+  import { stripHash, normalizeChannelName, plainNick } from '../lib/utils';
   import { updateCollapsed, updateInactiveCollapsed, updateNetworkOrder, updatePinnedOrder } from '../stores/api';
   import { dndzone, type DndEvent } from 'svelte-dnd-action';
   import type { Buffer, Network } from '../types';
@@ -272,7 +272,7 @@
     <span class="buffer" role="tab" tabindex="0" aria-selected={isActive ? 'true' : 'false'}>
       <div class="bufferBadges"><span class="badge" class:badge--mention={buf.unseenHighlights.length > 0}>{badgeCount > 0 ? (badgeCount > 99 ? '99+' : badgeCount) : ''}</span></div>
       <span class="g unread__label">unread</span>
-      <span class="label buffer-name">{(buf.type === 'query' ? '' : '#') + stripHash(buf.name)}</span>
+      <span class="label buffer-name">{buf.type === 'query' ? plainNick(buf.name) : '#' + stripHash(buf.name)}</span>
       {#if pinnedMap[`${net.networkId}:${buf.name}`]}<i class="fa fa-thumb-tack pinned-indicator" aria-hidden="true" title="Pinned"></i>{/if}
     </span>
   </li>
@@ -489,7 +489,7 @@
                       onclick={() => onSwitchBuffer(net.networkId, bufName)}
                       role="presentation">
                     <span class="buffer" role="tab" tabindex="0">
-                      <span class="label buffer-name">{(bufName.startsWith('#') || bufName.startsWith('&') ? '#' : '') + stripHash(bufName)}</span>
+                      <span class="label buffer-name">{bufName.startsWith('#') || bufName.startsWith('&') ? '#' + stripHash(bufName) : plainNick(bufName)}</span>
                     </span>
                   </li>
                 {/each}

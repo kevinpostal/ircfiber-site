@@ -178,6 +178,20 @@ describe('replacementFor', () => {
   });
 });
 
+describe('formatted nicks', () => {
+  const bold = make_member('\x02Bold\x02');
+
+  it('completes the typed plain prefix to the raw nick the server knows', () => {
+    const [c] = new TabCompletionEngine().getCandidates('Bo', 2, [bold], [], 'me');
+    expect(c.value).toBe('\x02Bold\x02');
+    expect(c.display).toBe('Bold');
+  });
+
+  it('never offers your own formatted nick for its plain spelling', () => {
+    expect(new TabCompletionEngine().getCandidates('Bo', 2, [bold], [], '\x02Bold\x02')).toEqual([]);
+  });
+});
+
 describe('mention completion', () => {
   const members: Member[] = [make_member('zodiac'), make_member('alice')];
 

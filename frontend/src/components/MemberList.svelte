@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getActiveBufferObj, getSortedMembers, getActiveNetwork } from '../stores/ircStore.svelte';
-  import { stripPrefix, nickColorIndex } from '../lib/utils';
+  import { stripPrefix, plainNick, nickColorIndex } from '../lib/utils';
+  import { parseIrcFormatting } from '../lib/ircFormatting';
   import type { ModeCategory, Member } from '../types';
   import { getShowMemberPrefixes } from '../stores/preferences.svelte';
 
@@ -101,14 +102,14 @@
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <button type="button" class="bufferLink {cssCat}"
                       class:away={member.isAway}
-                      title={usermask ? `${nick} (${usermask})` : nick}
+                      title={usermask ? `${plainNick(nick)} (${usermask})` : plainNick(nick)}
                       onclick={(e) => onNickClick?.(nick, e, member)}
                       onmouseenter={() => onNickHover?.(nick)}
                       onmouseleave={() => onNickHover?.(null)}>
                 {#if showPrefixes && sym}
                   <span class="member-mode-prefix" aria-hidden="true">{sym}</span>
                 {/if}
-                <span class="member-nick">{nick}</span>
+                <span class="member-nick">{@html parseIrcFormatting(nick)}</span>
                 {#if member.isBot}<span class="member-bot" title="Bot">BOT</span>{/if}
               </button>
             </li>

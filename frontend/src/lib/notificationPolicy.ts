@@ -2,6 +2,7 @@ import type { IRCMessage, Buffer, Network } from '../types';
 import { isImportantMessage, isHighlightableMessage } from '../stores/ircStore.svelte';
 import { getBufferPrefs, globalPrefs } from '../stores/preferences.svelte';
 import { stripIrcFormatting } from './ircFormatting';
+import { plainNick } from './utils';
 import { replaceColons } from './emoji';
 import { extractImageUrlsFromText, proxiedImageUrl } from './imageInline';
 
@@ -65,9 +66,10 @@ export function shouldNotifyForMessage(i: NotifyPolicyInput): boolean {
 
 /** IRCCloud notification titles (bundle @656537). */
 export function getNotificationTitle(msg: IRCMessage, buf: Buffer, networkName: string): string {
-  if (msg.command === 'INVITE') return `Channel invite from: ${msg.nick} (${networkName})`;
-  if (msg.command === 'WALLOPS') return `${msg.nick} (${networkName})`;
-  return `${msg.nick} \u2014 ${buf.type === 'channel' ? buf.name : networkName}`;
+  const nick = plainNick(msg.nick ?? '');
+  if (msg.command === 'INVITE') return `Channel invite from: ${nick} (${networkName})`;
+  if (msg.command === 'WALLOPS') return `${nick} (${networkName})`;
+  return `${nick} \u2014 ${buf.type === 'channel' ? buf.name : networkName}`;
 }
 
 /** IRCCloud notification bodies: stripped text run through emoji replacement. */

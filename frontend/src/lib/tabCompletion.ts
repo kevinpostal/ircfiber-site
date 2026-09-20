@@ -1,5 +1,5 @@
 import type { Member, TabCompletionCandidate } from '../types';
-import { stripPrefix, naturalCompare } from './utils';
+import { stripPrefix, plainNick, naturalCompare } from './utils';
 
 export class TabCompletionEngine {
   private candidates: TabCompletionCandidate[] = [];
@@ -107,23 +107,27 @@ export class TabCompletionEngine {
 
 /** The nicks of `members` which complete `word`, most recently active
  *  first. Own nick excluded — completing yourself is never what was
- *  meant. */
+ *  meant. The typed prefix is matched against the nick as it reads
+ *  (formatting stripped), but `value` is the RAW nick: it is what lands
+ *  in the line, and the only way a typed `/msg` reaches a nick that
+ *  carries formatting bytes. */
 export function nickCandidates(word: string, members: Member[], myNick: string): TabCompletionCandidate[] {
   const lower = word.toLowerCase();
+  const mine = plainNick(myNick).toLowerCase();
   return members
     .filter(m => {
-      const nick = stripPrefix(m.nick).toLowerCase();
-      return nick.startsWith(lower) && nick !== myNick.toLowerCase();
+      const nick = plainNick(m.nick).toLowerCase();
+      return nick.startsWith(lower) && nick !== mine;
     })
     .sort((a, b) => {
       if (a.lastSpoke !== b.lastSpoke) return (b.lastSpoke || 0) - (a.lastSpoke || 0);
       if (a.lastHighlighted !== b.lastHighlighted) return (b.lastHighlighted || 0) - (a.lastHighlighted || 0);
-      return naturalCompare(stripPrefix(a.nick), stripPrefix(b.nick));
+      return naturalCompare(plainNick(a.nick), plainNick(b.nick));
     })
     .map(m => ({
       value: stripPrefix(m.nick),
       type: 'nick' as const,
-      display: stripPrefix(m.nick),
+      display: plainNick(m.nick),
       isAway: m.isAway,
       lastSpoke: m.lastSpoke,
     }));
@@ -137,7 +141,7 @@ export function nickCandidates(word: string, members: Member[], myNick: string):
 export function mentionCandidates(fragment: string, members: Member[], myNick: string): TabCompletionCandidate[] {
   if (!fragment.startsWith('@')) return [];
   return nickCandidates(fragment.slice(1), members, myNick)
-    .map(c => ({ ...c, type: 'mention' as const, value: '@' + c.value, display: '@' + c.value }));
+    .map(c => ({ ...c, type: 'mention' as const, value: '@' + c.value, display: '@' + c.display }));
 }
 
 /** The `@` fragment the cursor sits in, or null. Discord-style: a run with

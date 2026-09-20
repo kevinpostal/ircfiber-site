@@ -2,7 +2,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import type { IRCMessage, Member } from '../types';
-  import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel, isTouchDevice } from '../lib/utils';
+  import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, plainNick, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel, isTouchDevice } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml, wrapNicksWithHighlight, buildNickMentionPattern } from '../lib/autolinker';
   import { modeSentences } from '../lib/modeSentence';
@@ -89,11 +89,14 @@
   const isBot = $derived(isBotNick(nick, findMemberForNick(nick), msg.prefix));
   const isBlockArt = $derived(memoBlockArt(containsBlockArt, msg.text || ''));
 
+  // Mentions are typed as plain text, so the pattern and the highlight set
+  // hold the formatting-free spelling of every roster nick and of our own;
+  // the roster map itself stays keyed by the raw nick the server knows.
   const allNicksPattern = $derived.by(() => buildNickMentionPattern(
-    [...memberByNick.keys(), myNick, ...highlightWords]));
+    [...[...memberByNick.keys()].map(plainNick), plainNick(myNick), ...highlightWords]));
   const highlightSet = $derived.by(() => {
     const s = new Set<string>();
-    if (myNick) s.add(myNick.toLowerCase());
+    if (myNick) s.add(plainNick(myNick).toLowerCase());
     for (const w of highlightWords) if (w) s.add(w.toLowerCase());
     return s;
   });
@@ -122,27 +125,25 @@
   /// rendered before NAMES lands.
   function getModeForNick(n: string): string {
     if (msg.fromMode) return msg.fromMode;
-    const cleaned = stripPrefix(n);
-    const member = memberByNick.get(cleaned);
-    if (member) return member.prefix;
-    // Fallback when MessageRow is rendered standalone (tests, etc.)
-    const bufObj = getActiveBufferObj();
-    if (!bufObj?.users) return '';
-    for (const u of bufObj.users) {
-      if (stripPrefix(u.nick) === cleaned) return u.prefix;
-    }
-    return '';
+    return findMemberForNick(n)?.prefix ?? '';
   }
 
+  /** Roster lookup by raw nick first, then by the formatting-free spelling
+   *  (a mention chip carries what was typed, never the author's control
+   *  bytes). */
   function findMemberForNick(n: string): Member | null {
     const cleaned = stripPrefix(n);
     const hit = memberByNick.get(cleaned);
     if (hit) return hit;
+    const plain = plainNick(n).toLowerCase();
+    for (const [k, member] of memberByNick) {
+      if (plainNick(k).toLowerCase() === plain) return member;
+    }
     // Fallback when MessageRow is rendered standalone (tests, etc.)
     const bufObj = getActiveBufferObj();
     if (!bufObj?.users) return null;
     for (const u of bufObj.users) {
-      if (stripPrefix(u.nick) === cleaned) return u;
+      if (stripPrefix(u.nick) === cleaned || plainNick(u.nick).toLowerCase() === plain) return u;
     }
     return null;
   }
@@ -239,13 +240,15 @@
     }
   }
 
-  /** The roster's own spelling of a nick. IRC nicks are case-insensitive,
-   *  so "@zodiac" must open Zodiac's popup with Zodiac's member row. */
+  /** The roster's own (raw) spelling of a nick. IRC nicks are
+   *  case-insensitive and a typed mention carries no formatting, so
+   *  "@zodiac" must open Zodiac's popup with Zodiac's member row — and the
+   *  raw nick is what the popup's WHOIS/MODE sends to the server. */
   function canonicalNick(n: string): string {
     const cleaned = stripPrefix(n);
     if (memberByNick.has(cleaned)) return cleaned;
-    const low = cleaned.toLowerCase();
-    for (const k of memberByNick.keys()) if (k.toLowerCase() === low) return k;
+    const low = plainNick(n).toLowerCase();
+    for (const k of memberByNick.keys()) if (plainNick(k).toLowerCase() === low) return k;
     return cleaned;
   }
 
@@ -514,6 +517,9 @@
   function getContentHTML(): string {
     const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd);
     let inner = '';
+    // Event rows are prose: the nick reads plain, the message text keeps
+    // its own formatting through renderText.
+    const shownNick = plainNick(nick);
     if (hasCollapseWidget) {
       inner += '<span class="collapseWidget" aria-label="User activity">'
         + '<i class="fa-regular fa-square-minus collapseIcon"></i>'
@@ -544,31 +550,31 @@
     } else if (cmd === 'JOIN') {
       const usermask = getUsermask(msg.prefix || '');
       inner += '<span class="prefix">&#x2192;</span>'
-        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span>`
+        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(shownNick)}</span>`
         + ' joined' + (usermask ? ` (${usermask})` : '');
     } else if (cmd === 'PART') {
       inner += '<span class="prefix">&#x2190;</span>'
-        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span>`
+        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(shownNick)}</span>`
         + ' left' + (msg.text ? ` (${escapeHtml(msg.text)})` : '');
     } else if (cmd === 'QUIT') {
       const usermask = getUsermask(msg.prefix || '');
       inner += '<span class="prefix">&#x21D1;</span>'
-        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span>`
+        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(shownNick)}</span>`
         + ' quit' + (usermask ? ` (${usermask})` : '') + (msg.text ? ` ${escapeHtml(msg.text)}` : '');
     } else if (cmd === 'NICK') {
-      const newNick = msg.params?.[msg.params.length - 1] || '';
-      inner += `${escapeHtml(nick)} <span class="prefix">&rarr;</span> <span class="buffer bufferLink user link">${escapeHtml(newNick)}</span>`;
+      const newNick = plainNick(msg.params?.[msg.params.length - 1] || '');
+      inner += `${escapeHtml(shownNick)} <span class="prefix">&rarr;</span> <span class="buffer bufferLink user link">${escapeHtml(newNick)}</span>`;
     } else if (cmd === 'TOPIC') {
-      inner += '<span class="prefix">&#x2699;</span> ' + escapeHtml(nick) + ' changed the topic to: ' + renderText(msg.text || '');
+      inner += '<span class="prefix">&#x2699;</span> ' + escapeHtml(shownNick) + ' changed the topic to: ' + renderText(msg.text || '');
     } else if (cmd === 'MODE') {
-      inner += modeSentences(msg.params || [], nick, msg.text || '').join('<span class="bullet">\u2022</span>');
+      inner += modeSentences(msg.params || [], shownNick, msg.text || '').join('<span class="bullet">\u2022</span>');
     } else if (cmd === 'KICK') {
-      const kicked = msg.params?.[1] || '';
+      const kicked = plainNick(msg.params?.[1] || '');
       inner += '<span class="prefix">&#x2190;</span>'
         + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(kicked)}</span>`
-        + ` was kicked by ${escapeHtml(nick)}` + (msg.text ? ` (${renderText(msg.text)})` : '');
+        + ` was kicked by ${escapeHtml(shownNick)}` + (msg.text ? ` (${renderText(msg.text)})` : '');
     } else if (cmd === 'INVITE') {
-      inner += '<span class="prefix">&#x2192;</span> ' + escapeHtml(nick) + ' invited ' + escapeHtml(msg.params?.[0] || '') + ' to ' + escapeHtml(msg.params?.[1] || '');
+      inner += '<span class="prefix">&#x2192;</span> ' + escapeHtml(shownNick) + ' invited ' + escapeHtml(plainNick(msg.params?.[0] || '')) + ' to ' + escapeHtml(msg.params?.[1] || '');
     } else if (cmd === 'AWAY') {
       // Same shape as the expanded group row: flag prefix, linked nick.
       // (IRCCloud drops away/back from the log entirely — `user_away`,
@@ -576,13 +582,13 @@
       // `unrendered_messages` list — so this is our own line, styled like
       // every other user-activity row.)
       inner += '<span class="prefix">&#x2691;</span> '
-        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span>`
+        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(shownNick)}</span>`
         + (msg.text ? ` is away: <span class="awayReason">${escapeHtml(msg.text)}</span>` : ' is back');
     } else if (cmd === 'CHGHOST') {
       // IRCCloud `user_chghost`: "<nick> changed host: <old> → <new>".
       const oldMask = getUsermask(msg.prefix || '');
       const newMask = msg.params?.join('@') || msg.text || '';
-      inner += `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span> changed host: `
+      inner += `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(shownNick)}</span> changed host: `
         + (oldMask ? `${escapeHtml(oldMask)} <span class="prefix">&#x2192;</span> ` : '')
         + escapeHtml(newMask);
     } else {
@@ -644,7 +650,7 @@
     const eTimeStr = eTs ? formatTime12Hour(new Date(eTs)) : '--:--:--';
     const eFullTitle = eTs ? formatDateTimeTitle(new Date(eTs)) : '';
     const eCmd = evt.command;
-    const eNick = evt.nick || '';
+    const eNick = plainNick(evt.nick || '');
     const eUsermask = getUsermask(evt.prefix || '');
     const eTypeClass = getIrcCloudTypeClass(eCmd, evt.params, evt.type);
 
@@ -658,7 +664,7 @@
     } else if (eCmd === 'NICK') {
       // IRCCloud `nickchange`: "<oldnick> → <newnick>", same as the
       // standalone row renders it.
-      const newNick = evt.params?.[evt.params.length - 1] || '';
+      const newNick = plainNick(evt.params?.[evt.params.length - 1] || '');
       html = `${escapeHtml(eNick)} <span class="prefix">&#x2192;</span> <span class="bufferLink user link">${escapeHtml(newNick)}</span>`;
     } else if (eCmd === 'CHGHOST') {
       const eNewMask = (evt.params || []).join('@') || evt.text || '';
@@ -764,7 +770,7 @@
     {#if !isSystem && !isJoinPart && !isAction && nick}
       {@const colorIndex = nickColorIndex(nick)}
       {@const colorCls = `c${colorIndex}`}
-      {@const initial = nick.charAt(0).toUpperCase()}
+      {@const initial = plainNick(nick).charAt(0).toUpperCase()}
       <span class="avatar letterAvatar messageAvatar hasUserParent {colorCls}">
         <span role="presentation">{initial}</span>
       </span>
@@ -780,11 +786,11 @@
       {#if !isSystem && !isJoinPart && !isAction && nick}
         {@const colorIndex = nickColorIndex(nick)}
         {@const colorCls = `c${colorIndex}`}
-        {@const initial = nick.charAt(0).toUpperCase()}
+        {@const initial = plainNick(nick).charAt(0).toUpperCase()}
         {@const modePrefix = getModeForNick(nick)}
         {@const modeInfo = modePrefix ? getUserModePrefix(modePrefix + 'x') : null}
         {@const usermask = getUsermask(msg.prefix || '')}
-        {@const authorTitle = usermask ? `${nick} (${usermask})` : nick}
+        {@const authorTitle = usermask ? `${plainNick(nick)} (${usermask})` : plainNick(nick)}
         {@const member = findMemberForNick(nick)}
         {@const sensibleRealname = getSensibleRealname(member?.realname || networkRealname)}
         {@const botFlag = isBotNick(nick, member, msg.prefix)}
@@ -792,7 +798,7 @@
           <span class="g" aria-hidden="true">&lt;</span>
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <span role="button" tabindex="0" class="buffer bufferLink author {colorCls} {modeInfo ? 'moded ' + modeInfo.cls : ''} user hasUserParent link"
-                title={authorTitle} onclick={handleNickClick} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNickClick?.(nick, e as any); } }}>{#if modePrefix && modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}{nick}</span>
+                title={authorTitle} onclick={handleNickClick} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNickClick?.(nick, e as any); } }}>{#if modePrefix && modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}{@html parseIrcFormatting(nick)}</span>
           <span class="g" aria-hidden="true">&gt;</span>
           {#if sensibleRealname}
             <span class="author-realname">{sensibleRealname}</span>
@@ -808,7 +814,7 @@
         <button type="button" class="replyQuote" onclick={handleQuoteClick} title="Jump to the replied-to message">
           <span class="replyArrow" aria-hidden="true">&#8617;</span>
           {#if replyParent}
-            <span class="replyNick">{stripPrefix(replyParent.nick ?? '')}:</span>
+            <span class="replyNick">{plainNick(replyParent.nick ?? '')}:</span>
             <span class="replyExcerpt">{(replyParent.text ?? '').slice(0, 120)}</span>
           {:else}
             <span class="replyExcerpt replyMissing">replying to an earlier message</span>
@@ -818,12 +824,12 @@
       {#if isAction && nick}
         {@const colorIndex = nickColorIndex(nick)}
         {@const colorCls = `c${colorIndex}`}
-        {@const initial = nick.charAt(0).toUpperCase()}
+        {@const initial = plainNick(nick).charAt(0).toUpperCase()}
         {@const member = findMemberForNick(nick)}
         {@const modePrefix = getModeForNick(nick)}
         {@const modeInfo = modePrefix ? getUserModePrefix(modePrefix + 'x') : null}
         {@const usermask = getUsermask(msg.prefix || '')}
-        {@const authorTitle = usermask ? `${nick} (${usermask})` : nick}
+        {@const authorTitle = usermask ? `${plainNick(nick)} (${usermask})` : plainNick(nick)}
         {@const botFlag = isBotNick(nick, member, msg.prefix)}
         {@const actionText = msg.text || ''}
         <!--
@@ -838,7 +844,7 @@
             <span role="presentation">{initial}</span>
           </span><span class="me_prefix">&mdash;</span>&nbsp;{#if modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events
           --><span role="button" tabindex="0" class="buffer bufferLink author {colorCls} {modeInfo ? 'moded ' + modeInfo.cls : ''} user hasUserParent link"
-                title={authorTitle} onclick={handleNickClick}>{nick}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}
+                title={authorTitle} onclick={handleNickClick}>{@html parseIrcFormatting(nick)}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}
         </span>
       {:else if chatContent}
         <span translate="no" class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}</span>
@@ -853,7 +859,7 @@
       <div class="reactions" aria-label="Reactions">
         {#each reactionChips as chip (chip.emoji)}
           <button type="button" class="reaction" class:own={chip.own}
-                  title={chip.nicks.join(', ')}
+                  title={chip.nicks.map(plainNick).join(', ')}
                   aria-pressed={chip.own}
                   disabled={!canReact}
                   onclick={(e) => { e.stopPropagation(); quickReact(chip.emoji); }}>

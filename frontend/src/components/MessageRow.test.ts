@@ -327,6 +327,28 @@ describe('MessageRow', () => {
 		expect(document.querySelector('.messageTruncated')).not.toBeInTheDocument();
 	});
 
+	it('renders a formatted author nick as markup with no control bytes', async () => {
+		const msg = createMessage({ nick: '\x02Bold\x02', text: 'hi' });
+		render(MessageRow, { props: { msg } });
+
+		const author = document.querySelector('.authorWrap .author');
+		expect(author?.querySelector('.bold')?.textContent).toBe('Bold');
+		expect(author?.textContent).toBe('Bold');
+		expect(document.querySelector('.messageAvatar span')?.textContent).toBe('B');
+	});
+
+	it('opens the popup with the roster spelling when a plain mention of a formatted nick is clicked', async () => {
+		const onNickClick = vi.fn();
+		const msg = createMessage({ nick: 'alice', text: '@bold hello' });
+		const member = createMember({ nick: '\x02Bold\x02' });
+		render(MessageRow, { props: { msg, onNickClick, memberByNick: new Map([['\x02Bold\x02', member]]) } });
+
+		const chip = document.querySelector<HTMLElement>('.content .atMention');
+		expect(chip?.textContent).toBe('@bold');
+		chip?.click();
+		expect(onNickClick).toHaveBeenCalledWith('\x02Bold\x02', expect.anything(), member);
+	});
+
 	// The author's status is a property of the message (engine `from_mode`),
 	// not of the current roster: deriving it live lost the glyph the moment
 	// the author quit or was de-opped, and on any history rendered before

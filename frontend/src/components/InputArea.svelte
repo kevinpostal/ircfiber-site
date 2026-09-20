@@ -5,7 +5,7 @@
   import { getSlashHandler } from '../lib/slashCommands';
   import { TabCompletionEngine, recentHighlightersCache, replacementFor, mentionCandidates, mentionFragmentAt } from '../lib/tabCompletion';
   import { InputHistory } from '../lib/inputHistory';
-  import { generateLabel, getAvatarColor, ensureChannelPrefix, stripPrefix, normalizeChannelName, escapeTagValue, isTouchDevice } from '../lib/utils';
+  import { generateLabel, getAvatarColor, ensureChannelPrefix, stripPrefix, plainNick, normalizeChannelName, escapeTagValue, isTouchDevice } from '../lib/utils';
   import { startUploads, setDeps } from '../stores/uploadFlow.svelte';
   import { uploadState, ringState, aggregateProgress } from '../stores/uploadStore.svelte';
   import { pastebinStore, closeFromFile } from '../stores/pastebinStore.svelte';
@@ -165,7 +165,7 @@
   const myNick = $derived(activeNet?.currentNick || activeNet?.nick || '');
   const tagFeatures = $derived(clientTagFeatures(activeNet));
   const avatarColor = $derived(getAvatarColor(myNick));
-  const initial = $derived(myNick ? myNick.charAt(0).toUpperCase() : '?');
+  const initial = $derived(myNick ? plainNick(myNick).charAt(0).toUpperCase() : '?');
   // The store's getTypersForBuffer() expires entries 6.5s after the
   // last TAGMSG, but a $derived only re-runs when its reactive inputs
   // mutate. In a quiet channel nothing does after the final TAGMSG, so
@@ -199,10 +199,10 @@
     const nicks = typingNicks;
     if (nicks.length === 0) return '';
     if (nicks.length > 5) return `${nicks.length} people are typing`;
-    let s = nicks[0];
+    let s = plainNick(nicks[0]);
     for (let i = 1; i < nicks.length; i++) {
       s += i === nicks.length - 1 ? ' and ' : ', ';
-      s += nicks[i];
+      s += plainNick(nicks[i]);
     }
     return s + (nicks.length === 1 ? ' is typing' : ' are typing');
   });

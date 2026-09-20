@@ -1,4 +1,5 @@
 import type { LinkPart, EmbedType } from '../types';
+import { stripIrcFormatting } from './ircFormatting';
 
 // Channel prefix chars (default #, can be overridden by ISUPPORT CHANTYPES)
 let chanPrefixChars = '#';
@@ -274,7 +275,9 @@ function wrapTextSegment(segment: string, pattern: RegExp, highlightSet: Set<str
     if (m.index > lastIdx) result += segment.slice(lastIdx, m.index);
     const at = m[1];
     const nick = m[2];
-    const colorIndex = hashStr(nick) % 27;
+    // Same identity as nickColorIndex: a formatted author and its plain
+    // mention paint alike.
+    const colorIndex = hashStr(stripIrcFormatting(nick)) % 27;
     const classes = ['buffer', 'bufferLink'];
     // `atMention` is the chip; `mention` stays reserved for "mentions me"
     // and is what washes the row amber.

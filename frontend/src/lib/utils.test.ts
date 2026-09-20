@@ -18,6 +18,7 @@ import {
   foldNickCase,
   equalNicks,
   nickColorIndex,
+  plainNick,
   parseChannelList,
   getDisplayName,
   getMsgDate,
@@ -453,6 +454,11 @@ describe('nickColorIndex (IRCCloud parity)', () => {
     });
   }
 
+  it('paints a formatted nick and its plain spelling the same colour', () => {
+    expect(nickColorIndex('\x02Bold\x02')).toBe(nickColorIndex('Bold'));
+    expect(nickColorIndex('\x0304Red\x0f')).toBe(nickColorIndex('Red'));
+  });
+
   it('treats trailing-underscore aliases as the same colour', () => {
     expect(nickColorIndex('alice')).toBe(nickColorIndex('alice_'));
     expect(nickColorIndex('alice')).toBe(nickColorIndex('alice__'));
@@ -676,5 +682,16 @@ describe('getMsgDate (day divider is the viewer\'s day)', () => {
 
   it('returns an empty key for a message with no time at all', () => {
     expect(getMsgDate(msg({}))).toBe('');
+  });
+});
+
+describe('plainNick', () => {
+  it('drops the status prefix and every formatting byte', () => {
+    expect(plainNick('@\x0304Red\x0f')).toBe('Red');
+    expect(plainNick('~\x02Bold\x02!user@host')).toBe('Bold');
+  });
+
+  it('leaves an unformatted nick alone', () => {
+    expect(plainNick('alice')).toBe('alice');
   });
 });

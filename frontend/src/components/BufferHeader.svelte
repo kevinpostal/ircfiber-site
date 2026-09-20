@@ -8,6 +8,7 @@
   import { archivedMap, isIgnored, ignoreList, addIgnores, removeIgnores } from '../stores/preferences.svelte';
   import { parseIgnoreList } from '../lib/ignore';
   import { groupServerLog, phaseToLabel } from '../lib/serverLogGroups';
+  import { plainNick } from '../lib/utils';
   import { FAIL_TYPES } from '../lib/connectionWarnings';
   import { isFiberServer } from '../lib/fiberServer';
   import LiveElapsed from './LiveElapsed.svelte';
@@ -23,10 +24,14 @@
 
   const activeNetwork = $derived(getActiveNetwork());
   const activeBufferObj = $derived(getActiveBufferObj());
+  // A query buffer is named after the raw nick (what the server routes
+  // by); the heading shows it as a human reads it.
   const channelName = $derived(
     ircState.activeBuffer.bufferName === '_server'
       ? (activeNetwork?.name || ircState.activeBuffer.bufferName)
-      : (activeBufferObj?.name || ircState.activeBuffer.bufferName || '\u2014')
+      : ircState.activeBuffer.bufferName && !ircState.activeBuffer.bufferName.startsWith('#')
+        ? plainNick(activeBufferObj?.name || ircState.activeBuffer.bufferName || '\u2014')
+        : (activeBufferObj?.name || ircState.activeBuffer.bufferName || '\u2014')
   );
   const topic = $derived(activeBufferObj?.topic || '');
   // IRCCloud shows the counterpart's real name under the "Conversation

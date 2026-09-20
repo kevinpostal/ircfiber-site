@@ -1,6 +1,6 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo, ChannelListChunk } from '../types';
 import { MODE_HIERARCHY } from '../types';
-import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, prefixRun, naturalCompare, normaliseIdentifier, splitUserHost, escapeTagValue } from '../lib/utils';
+import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, plainNick, prefixRun, naturalCompare, normaliseIdentifier, splitUserHost, escapeTagValue } from '../lib/utils';
 import { setChanPrefixChars } from '../lib/autolinker';
 import { setChanModeTypes } from '../lib/modeSentence';
 import { isMessageIgnored } from '../lib/ignorePolicy';
@@ -1694,7 +1694,10 @@ export function checkHighlight(msg: IRCMessage, net: Network): boolean {
     return re.test(haystack);
   };
 
-  if (myNick && hasWord(text, myNick)) return true;
+  // People type the nick as they read it, without our formatting bytes;
+  // the raw spelling still counts for a client that pastes it verbatim.
+  const myPlain = plainNick(myNick);
+  if (myNick && (hasWord(text, myPlain) || (myPlain !== myNick && hasWord(text, myNick)))) return true;
 
   for (const word of highlightWords) {
     const w = word.trim();
@@ -4571,7 +4574,7 @@ export function getSortedMembers(): Map<ModeCategory, Member[]> {
   for (const cat of MODE_HIERARCHY) {
     const members = activeBufferObj.users
       .filter(u => u.category === cat)
-      .sort((a, b) => naturalCompare(stripPrefix(a.nick), stripPrefix(b.nick)));
+      .sort((a, b) => naturalCompare(plainNick(a.nick), plainNick(b.nick)));
     if (members.length > 0) {
       result.set(cat, members);
     }

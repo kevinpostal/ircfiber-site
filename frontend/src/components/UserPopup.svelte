@@ -2,7 +2,7 @@
   import { ircState, getActiveNetwork, getActiveBufferObj } from '../stores/ircStore.svelte';
   import { sendRaw, sendMessage } from '../stores/wsConnection.svelte.ts';
   import { addIgnore } from '../stores/preferences.svelte';
-  import { getAvatarColor, stripPrefix } from '../lib/utils';
+  import { getAvatarColor, stripPrefix, plainNick } from '../lib/utils';
   import { MODE_PREFIX_MAP } from '../types';
   import type { Member, ModeCategory, WhoisData } from '../types';
 
@@ -24,7 +24,11 @@
   const buffer = $derived(getActiveBufferObj());
   const isConnected = $derived(network?.connected ?? false);
 
-  const displayNick = $derived(stripPrefix(member?.nick ?? nick));
+  // rawNick is what the server knows and routes by (WHOIS, MODE, KICK,
+  // INVITE, the query buffer name, ignore masks); displayNick is the same
+  // nick as a human reads it, formatting bytes removed. Never send the latter.
+  const rawNick = $derived(stripPrefix(member?.nick ?? nick));
+  const displayNick = $derived(plainNick(rawNick));
   const avatarColor = $derived(getAvatarColor(displayNick));
   const avatarLetter = $derived(displayNick.charAt(0).toUpperCase());
 
@@ -141,15 +145,15 @@
 
   function doWhois(): void {
     if (networkId) {
-      const buf = ircState.activeBuffer.bufferName || displayNick;
-      ircState.pendingWhois.set(displayNick.toLowerCase(), { networkId, bufferName: buf, ts: Date.now() });
+      const buf = ircState.activeBuffer.bufferName || rawNick;
+      ircState.pendingWhois.set(rawNick.toLowerCase(), { networkId, bufferName: buf, ts: Date.now() });
       // IRCCloud-style: show cached whois immediately so the user gets
       // instant feedback even if the server is slow or the nick is only
       // known via the member list realname cache. The live WHOIS reply
       // (via App.svelte) will then refresh the overlay with fresh data.
       const m = member;
       const whoisData: WhoisData = {
-        nick: displayNick,
+        nick: rawNick,
         user: m?.ident || '',
         host: m?.host || '',
         realname: m?.realname || '',
@@ -167,54 +171,54 @@
       // where server WHOIS for other nicks was delayed or coalesced.
       ircState.overlay.type = 'whois';
       ircState.overlay.data = whoisData;
-      onSendRaw(networkId, 'WHOIS ' + displayNick);
+      onSendRaw(networkId, 'WHOIS ' + rawNick);
     }
     close();
   }
 
   function openDM(): void {
-    if (networkId) onSwitchBuffer(networkId, displayNick);
+    if (networkId) onSwitchBuffer(networkId, rawNick);
     close();
   }
 
   function doInvite(): void {
     if (networkId && buffer?.name) {
       const channel = prompt('Invite ' + displayNick + ' to channel:');
-      if (channel) onSendRaw(networkId, 'INVITE ' + displayNick + ' ' + channel);
+      if (channel) onSendRaw(networkId, 'INVITE ' + rawNick + ' ' + channel);
     }
     close();
   }
 
   function doIgnore(): void {
     // IRCCloud getBanMask: *!user@host when the userhost is known, else nick!*@*.
-    const mask = ident && ident.includes('@') ? '*!' + ident : displayNick + '!*@*';
+    const mask = ident && ident.includes('@') ? '*!' + ident : rawNick + '!*@*';
     const input = prompt('Ignore messages from ' + displayNick + ' at this hostmask:', mask);
     if (input) addIgnore(input);
     close();
   }
 
   function doOp(): void {
-    if (networkId && buffer?.name) onSendRaw(networkId, `MODE ${buffer.name} +o ${displayNick}`);
+    if (networkId && buffer?.name) onSendRaw(networkId, `MODE ${buffer.name} +o ${rawNick}`);
     close();
   }
   function doDeop(): void {
-    if (networkId && buffer?.name) onSendRaw(networkId, `MODE ${buffer.name} -o ${displayNick}`);
+    if (networkId && buffer?.name) onSendRaw(networkId, `MODE ${buffer.name} -o ${rawNick}`);
     close();
   }
   function doVoice(): void {
-    if (networkId && buffer?.name) onSendRaw(networkId, `MODE ${buffer.name} +v ${displayNick}`);
+    if (networkId && buffer?.name) onSendRaw(networkId, `MODE ${buffer.name} +v ${rawNick}`);
     close();
   }
   function doDevoice(): void {
-    if (networkId && buffer?.name) onSendRaw(networkId, `MODE ${buffer.name} -v ${displayNick}`);
+    if (networkId && buffer?.name) onSendRaw(networkId, `MODE ${buffer.name} -v ${rawNick}`);
     close();
   }
   function doKick(): void {
-    if (networkId && buffer?.name) onSendRaw(networkId, `KICK ${buffer.name} ${displayNick}`);
+    if (networkId && buffer?.name) onSendRaw(networkId, `KICK ${buffer.name} ${rawNick}`);
     close();
   }
   function doBan(): void {
-    if (networkId && buffer?.name) onSendRaw(networkId, `MODE ${buffer.name} +b ${displayNick}!*@*`);
+    if (networkId && buffer?.name) onSendRaw(networkId, `MODE ${buffer.name} +b ${rawNick}!*@*`);
     close();
   }
 
@@ -225,12 +229,12 @@
       // sidebar and message list — like IRCCloud does. The buffer is
       // created automatically by switchToBuffer when the target is a
       // nick (not a channel).
-      onSwitchBuffer(networkId, displayNick);
+      onSwitchBuffer(networkId, rawNick);
       // Send the private message using sendMessage (cmd: 'msg') so the
       // engine persists it in MongoDB and it survives page reloads.
       // Using sendRaw (cmd: 'raw') would send the PRIVMSG to the IRC
       // server without storing it — the message would disappear on reload.
-      onSendMessage(networkId, displayNick, text);
+      onSendMessage(networkId, rawNick, text);
     }
     messageValue = '';
     close();

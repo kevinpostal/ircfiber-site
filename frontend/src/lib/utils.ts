@@ -1,5 +1,6 @@
 import type { IRCMessage, ModeCategory } from '../types';
 import { MODE_PREFIX_MAP } from '../types';
+import { stripIrcFormatting } from './ircFormatting';
 
 export function escapeHtml(text: string): string {
   if (!text) return '';
@@ -401,6 +402,16 @@ export function stripPrefix(nick: string): string {
   return n;
 }
 
+/**
+ * The nick as a human reads it: channel prefixes and IRC formatting
+ * (bold/colour/… control bytes) removed. Display and matching only — the
+ * server compares nicks byte-for-byte, so anything SENT to it (WHOIS, MODE,
+ * KICK, /msg targets, tab completion inserts) must keep the raw nick.
+ */
+export function plainNick(nick: string): string {
+  return stripIrcFormatting(stripPrefix(nick));
+}
+
 /** The leading run of channel-prefix chars on a nick (`*~@Zodiac` → `*~@`). */
 export function prefixRun(nick: string): string {
   // Same char class as stripPrefix above — keep the two in sync.
@@ -482,7 +493,9 @@ export function normaliseIdentifier(nick: string | null | undefined): string {
  * in the same colour across both clients.
  */
 export function nickColorIndex(nick: string): number {
-  const id = normaliseIdentifier(nick);
+  // Formatting-free: `\x02Bold\x02` and `Bold` paint the same colour, and
+  // the mention chip (typed plain text) matches the author's avatar.
+  const id = normaliseIdentifier(stripIrcFormatting(nick));
   let n = 0;
   for (let i = 0; i < id.length; i++) {
     n = id.charCodeAt(i) + (n << 6) + (n << 16) - n;

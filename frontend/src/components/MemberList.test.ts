@@ -34,6 +34,24 @@ describe('MemberList', () => {
     await expect.element(page.getByText('member1')).toBeInTheDocument();
   });
 
+  it('renders a formatted nick as markup with no control bytes', async () => {
+    const net = createNetwork({ networkId: 'net1' });
+    const buf = createBuffer({
+      name: '#chan',
+      users: [createMember({ nick: '\x02Bold\x02', prefix: '', category: 'MEMBER' })],
+    });
+    net.buffers.push(buf);
+    ircState.networks.push(net);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '#chan';
+    render(MemberList);
+    const el = document.querySelector('.member-nick');
+    expect(el?.querySelector('.bold')?.textContent).toBe('Bold');
+    expect(el?.textContent).toBe('Bold');
+    // The click hands the raw nick on, so a WHOIS from the popup reaches the server's spelling.
+    expect(document.querySelector<HTMLElement>('.member-item button')?.title).toBe('Bold');
+  });
+
   it('badges bot members with a BOT pill', async () => {
     const net = createNetwork({ networkId: 'net1' });
     const buf = createBuffer({

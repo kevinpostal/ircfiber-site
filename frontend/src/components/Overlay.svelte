@@ -4,7 +4,7 @@
   import { ignoreList, removeIgnores } from '../stores/preferences.svelte';
   import { parseIgnoreList } from '../lib/ignore';
   import { IGNORABLE_COMMANDS } from '../lib/ignorePolicy';
-  import { normalizeChannelName, messageHostmask } from '../lib/utils';
+  import { normalizeChannelName, messageHostmask, plainNick } from '../lib/utils';
   import { updateRoute } from '../lib/routing';
   import { deleteNetwork } from '../stores/api';
 import Dialog from './Dialog.svelte';
@@ -270,13 +270,13 @@ import Dialog from './Dialog.svelte';
     {#if ircState.overlay.type === 'whois' && ircState.overlay.data}
       {@const w = ircState.overlay.data as WhoisData}
       <div class="overlay-header">
-        <h2>WHOIS: {w.nick}</h2>
+        <h2>WHOIS: {plainNick(w.nick)}</h2>
         <button class="overlay-done" onclick={close} style="margin-right: 32px;">Done</button>
       </div>
       {#if (w as any).whoisFailed}
         <div style="padding: 32px 20px; text-align: center; color: #8b949e;">
           <div style="font-size: 14px; color: #f85149; margin-bottom: 8px;">No such nick</div>
-          <div style="font-size: 12px; color: #8b949e;">No such nick/channel: <b style="color:#d9d9d9">{w.nick}</b></div>
+          <div style="font-size: 12px; color: #8b949e;">No such nick/channel: <b style="color:#d9d9d9">{plainNick(w.nick)}</b></div>
         </div>
       {:else}
       <table cellspacing="0" class="overlayTable whois-table">
@@ -334,7 +334,7 @@ import Dialog from './Dialog.svelte';
           {#each w.special ?? [] as line, i (line)}
             <tr class:odd={i % 2 === 1} class:even={i % 2 === 0}>
               <td class="whois-label">{i === 0 ? 'Info' : ''}</td>
-              <td class="whois-value">{w.nick} {line}</td>
+              <td class="whois-value">{plainNick(w.nick)} {line}</td>
             </tr>
           {/each}
         </tbody>
