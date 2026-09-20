@@ -376,6 +376,13 @@ ircd_ts6link_peer_sid: ""              # ergo server.sid, ^[0-9][0-9A-Z]{2}$
 ircd_ts6link_peer_host: ""             # ergo host or IP (we dial them)
 ircd_ts6link_peer_port: 6697
 
+# Nick charset extension (formatting bytes + raw UTF-8) for the ergo link.
+# Stays false until irc.netcrave.chat mirrors the <cpchars> block in
+# roles/ircd/templates/modules.conf.j2: the codepage table is CAPAB-compared
+# and a mismatch refuses their link (seen 2026-09-20). Flip together with the
+# peer, then `make deploy-ircd-network`.
+ircd_nick_charset_extended: false
+
 # Our own ircd's server name. Also here, not only in roles/ircd defaults,
 # because roles/engine's env.j2 needs it: the engine role runs in its own
 # play (hosts: ircfiber_engines) where the ircd role's defaults are not in

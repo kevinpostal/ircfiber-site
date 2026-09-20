@@ -381,10 +381,11 @@
 # Stock rfc1459 tables, verbatim from the image's
 # examples/codepages/rfc1459.example.conf. Spanningtree CAPAB compares
 # name + front/map/middle tables with linked servers; any difference refuses
-# the link. Reports CASEMAPPING=rfc1459. With ircd_nick_charset_extended the
-# table below is appended and NO LONGER matches irc.netcrave.chat verbatim:
-# every InspIRCd peer must carry the identical extension or its link fails
-# CAPAB (the k3s leaf renders this same template).
+# the link. Reports CASEMAPPING=rfc1459. ircd_nick_charset_extended (off by
+# default) appends the block below, after which the table NO LONGER matches
+# irc.netcrave.chat and their link fails CAPAB ("codepage (front set to ...)")
+# until they carry the identical extension. The k3s leaf renders this same
+# template.
 <codepage name="rfc1459">
 <cpchars index="45">                        # -
 <cpchars begin="48"  end="57">              # 01234567899

@@ -192,9 +192,14 @@ ircd_maxline: 8192
 # allowed-characters {irc-formatting: true, printable-glyphs: true}:
 # formatting bytes 0x02 0x03 0x04 0x0F 0x11 0x16 0x1D 0x1E 0x1F and every byte
 # 0x80-0xFF (raw UTF-8, byte-level, no sequence validation — InspIRCd's codepage
-# is single-byte). Link-compared: every InspIRCd peer (k3s leaf, irc.netcrave.chat)
-# must carry the identical table or its CAPAB fails; false restores the stock table.
-ircd_nick_charset_extended: true
+# is single-byte). OFF by default: spanningtree CAPAB compares the codepage
+# table and refuses the link on any difference, so turning this on drops
+# EVERY InspIRCd peer that does not carry the identical <cpchars> block —
+# irc.netcrave.chat went down with "codepage (front set to ... here and ...)"
+# the moment it was enabled. Flip it only after every third-party peer has
+# applied the same block (modules.conf.j2); the k3s leaf renders this template
+# and follows automatically (make deploy-ircd-network).
+ircd_nick_charset_extended: false
 
 # Oper. `ircd_oper_name` is BOTH the /OPER login name in opers.conf.j2 and
 # the Anope `oper {}` block name in services.conf.j2 — and Anope resolves
