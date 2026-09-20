@@ -553,6 +553,42 @@ docker volume rm ircfiber_bridge_data   # the retired sidecar's volume
 > `playbooks/ircd.yml`, redeploy the gateway. Registrations made after the
 > cutover are lost (2.0 cannot read `anope.json`).
 
+#### TS6 link bridge sidecar (`ircfiber-ts6link`: `link.ircfiber.com`, SID `0TS`)
+
+InspIRCd 4 speaks only its own spanning-tree protocol, so the link to a
+charybdis-style TS6 peer (the friend's ergo built from `waveplate/ergo`
+`ts6-linking`) is a **protocol-translating pseudo-server**: a second Anope
+from the same image (`ircd_services_image`; `roles/ircd/tasks/ts6link.yml`,
+`templates/ts6link.conf.j2`) loading only the `inspircd` protocol module
+and our `ts6link` module (`modules/ts6link` on the `kevinpostal/anope`
+`ts6link` branch). It links to the hub as an **ordinary, never u-lined**
+server — the peer's users are ordinary users subject to channel modes,
+bans and NickServ enforcement — dials the peer as a TS6 server and mirrors
+servers, users and channels both ways with UIDs passed through unchanged.
+It is a separate process on purpose: InspIRCd never routes a message back
+over the link it arrived on, so a module inside `ircfiber-services` would
+never see NickServ/BotServ/BridgeServ traffic bound for ergo users.
+Nothing persistent lives in it (no database, no data volume).
+
+Configuration: `ircd_ts6link_*` in `roles/ircd/defaults/main.yml`, the peer
+values (`ircd_ts6link_peer_name/_sid/_host/_port`) plus
+`ircd_ts6link_enabled: true` in `group_vars/all/vars.yml`, and
+`vault_ircd_ts6link_link_password` / `_send_password` /
+`_receive_password` in the vault. The render task refuses empty
+placeholders, so leave the toggle off until the peer operator has supplied
+their values. The peer's SID must start with a digit (InspIRCd's `IsSID`).
+
+```bash
+docker logs ircfiber-ts6link | grep -E 'ts6link|Successfully connected to uplink'
+# expect: Successfully connected to uplink … ; ts6link: linked to <peer> (<sid>) ; ts6link: <peer> acknowledged our burst
+# raw TS6 lines: set debug = yes in the module block (templates/ts6link.conf.j2) and `make deploy-ircd`
+```
+
+Disable: `ircd_ts6link_enabled: false` + `make deploy-ircd` removes the
+hub's `<link>` on the rehash and removes the container (`state: absent` in
+`tasks/services.yml`); the peer's servers and users leave the network with
+the SQUIT of `link.ircfiber.com`.
+
 ## Tailscale ACL recommendation
 
 In the Tailscale admin console → ACLs, restrict the `ircfiber` tag to:

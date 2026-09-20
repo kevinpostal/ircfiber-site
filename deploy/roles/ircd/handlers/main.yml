@@ -60,6 +60,12 @@
     state: started
     restart: true
 
+- name: Restart ts6link
+  community.docker.docker_container:
+    name: "{{ ircd_ts6link_container_name }}"
+    state: started
+    restart: true
+
 # (No bridge handler: the Discord bridge sidecar is retired — BridgeServ
 # runs on the services instance itself. A leftover ircfiber-bridge
 # container is removed by tasks/services.yml.)

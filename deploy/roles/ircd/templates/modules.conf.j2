@@ -379,9 +379,12 @@
 <module name="banredirect">
 <module name="codepage">
 # Stock rfc1459 tables, verbatim from the image's
-# examples/codepages/rfc1459.example.conf — matches irc.netcrave.chat.
-# Spanningtree CAPAB compares name + front/map/middle tables with linked
-# servers; any difference refuses the link. Reports CASEMAPPING=rfc1459.
+# examples/codepages/rfc1459.example.conf. Spanningtree CAPAB compares
+# name + front/map/middle tables with linked servers; any difference refuses
+# the link. Reports CASEMAPPING=rfc1459. With ircd_nick_charset_extended the
+# table below is appended and NO LONGER matches irc.netcrave.chat verbatim:
+# every InspIRCd peer must carry the identical extension or its link fails
+# CAPAB (the k3s leaf renders this same template).
 <codepage name="rfc1459">
 <cpchars index="45">                        # -
 <cpchars begin="48"  end="57">              # 01234567899
@@ -389,6 +392,18 @@
 <cpchars begin="91"  end="96"  front="yes"> # [\]^_`
 <cpchars begin="97"  end="122" front="yes"> # abcdefghijklmnopqrstuvwxyz
 <cpchars begin="123" end="125" front="yes"> # {|}
+{% if ircd_nick_charset_extended %}
+# Extended charset (see ircd_nick_charset_extended): IRC formatting bytes and
+# raw UTF-8. Allowed at the front too: a nick may start with a colour code or a
+# multibyte glyph. Forbidden bytes (NUL CR LF SP ! * , . ? @) and front rules
+# (digits $ : # ~ & @ % + ! *) are enforced by the module itself.
+<cpchars begin="2"   end="4"   front="yes"> # ^B ^C ^D  bold, colour, hex colour
+<cpchars index="15"            front="yes"> # ^O reset
+<cpchars index="17"            front="yes"> # ^Q monospace
+<cpchars index="22"            front="yes"> # ^V reverse
+<cpchars begin="29"  end="31"  front="yes"> # ^] ^^ ^_  italic, strikethrough, underline
+<cpchars begin="128" end="255" front="yes"> # UTF-8 lead/continuation bytes
+{% endif %}
 <cpcase lower="97"  upper="65"> # a => A
 <cpcase lower="98"  upper="66"> # b => B
 <cpcase lower="99"  upper="67"> # c => C

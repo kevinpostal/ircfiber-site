@@ -47,6 +47,19 @@
       port="{{ ircd_link_port }}"
       sendpass="{{ vault_ircd_services_link_password }}"
       recvpass="{{ vault_ircd_services_link_password }}">
+
+#-#-#-#-#-#-#-#-#-#-#-#  TS6 LINK BRIDGE (ts6link)  -#-#-#-#-#-#-#-#-#-#-#
+# Second Anope instance running the ts6link module (roles/ircd/tasks/ts6link.yml).
+# It links here as an ordinary server and introduces the ergo peer's servers and
+# users behind itself. Deliberately NOT <uline>d: ergo users are ordinary users
+# subject to channel modes, bans and NickServ enforcement.
+{% if ircd_ts6link_enabled %}
+<link name="{{ ircd_ts6link_server_name }}"
+      ipaddr="{{ ircd_ts6link_net_alias }}"
+      port="{{ ircd_link_port }}"
+      sendpass="{{ vault_ircd_ts6link_link_password }}"
+      recvpass="{{ vault_ircd_ts6link_link_password }}">
+{% endif %}
 {% endif %}
 
 # <uline> must be declared on every server on the network, leaf included:
@@ -367,9 +380,13 @@
           genericoper="no"
           userstats="Pu">
 
+# maxline: <limits> is the only line-length setting InspIRCd 4 has (no
+# compile-time MAXBUF; floor 512, no ceiling). Every <connect recvq> below
+# is >= this and <performance netbuffersize> exceeds it.
 <limits maxaway="{{ ircd_awaylen }}"
         maxchan="{{ ircd_channellen }}"
         maxhost="64"
+        maxline="{{ ircd_maxline }}"
         maxuser="{{ ircd_identlen }}"
         maxkey="30"
         maxkick="{{ ircd_kicklen }}"

@@ -486,3 +486,17 @@
     var: ircd_chanserv_setup.stdout_lines
   when: ircd_chanserv_setup_enabled | bool
   tags: [chanserv]
+
+# The TS6 link bridge sidecar (ircfiber-ts6link, tasks/ts6link.yml) rides
+# along here so `make deploy-ircd` and `make ship-services` both keep it in
+# sync with the image. Disabled means gone: the container is removed, and
+# inspircd.conf.j2 drops its <link> on the same deploy.
+- name: Manage the TS6 link bridge sidecar
+  ansible.builtin.include_tasks: ts6link.yml
+  when: ircd_ts6link_enabled | bool
+
+- name: Remove the TS6 link bridge sidecar when disabled
+  community.docker.docker_container:
+    name: "{{ ircd_ts6link_container_name }}"
+    state: absent
+  when: not ircd_ts6link_enabled | bool

@@ -1,0 +1,102 @@
+/*
+ * {{ ansible_managed }}
+ * Anope 2.1 — {{ ircd_ts6link_server_name }}: the TS6 link bridge for {{ ircd_network_name }}
+ *
+ * A second, deliberately minimal Anope: no database, no pseudo clients, no
+ * NickServ/ChanServ — only the inspircd protocol module (the whole uplink
+ * side) and ts6link (the whole peer side). It links to the hub as an
+ * ORDINARY server: never add it to <uline> on the ircd, and never add
+ * `ulines` for the peer here — the peer's users must stay ordinary users
+ * subject to channel modes, bans and NickServ enforcement.
+ *
+ * Mounted at /anope/conf/anope.conf. Same image as ircfiber-services
+ * (roles/ircd/files/Containerfile.anope); rendered by tasks/ts6link.yml.
+ */
+
+define
+{
+	name = "services.name"
+	value = "{{ ircd_ts6link_server_name }}"
+}
+
+/* Uplink: the hub via its Docker network alias, plaintext on the
+ * container-internal link port, exactly like services. */
+uplink
+{
+	host = "{{ ircd_ircfiber_net_alias }}"
+	protocol = "ipv4"
+	ssl = no
+	port = {{ ircd_link_port }}
+	password = "{{ vault_ircd_ts6link_link_password }}"
+}
+
+/* The SID must differ from every other SID on the network: {{ ircd_server_id }}
+ * (hub), 2FB (k8s leaf), {{ ircd_services_server_id }} and up (services + BridgeServ
+ * guild links), and the peer's own SID. */
+serverinfo
+{
+	name = "${services.name}"
+	description = "{{ ircd_ts6link_server_description }}"
+	id = "{{ ircd_ts6link_server_id }}"
+	pid = "/tmp/services.pid"
+	motd = "conf/services.motd"
+}
+
+/* Protocol: 2.1's native InspIRCd 4 module. */
+module { name = "inspircd" }
+
+networkinfo
+{
+	networkname = "{{ ircd_network_name }}"
+	nicklen = {{ ircd_nicklen }}
+	userlen = {{ ircd_identlen }}
+	hostlen = 64
+	chanlen = {{ ircd_channellen }}
+	modelistsize = 100
+	vhost_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-"
+	allow_undotted_vhosts = false
+	disallow_start_or_end = ".-"
+}
+
+options
+{
+	/* Must match the ircd codepage (see services.conf.j2). */
+	casemap = "rfc1459"
+	readtimeout = 5s
+	timeoutcheck = 3s
+	retrywait = 30s
+	updatetimeout = 5m
+	expiretimeout = 30m
+}
+
+/* No log {} block on purpose: the container runs `anope --nofork`, which
+ * prints every server/module/user log line to stdout (src/logger.cpp
+ * Log::~Log), i.e. `docker logs ircfiber-ts6link`, and there is no logs
+ * volume for a file target to live on. */
+
+/* TLS client for the peer connection (ts6link dials the peer's TLS
+ * listener). No cert/key: client use only, and ssl_openssl does not verify
+ * the peer certificate — the link is authenticated by the passwords. */
+module { name = "ssl_openssl" }
+
+/*
+ * The peer. peer_sid must start with a digit (InspIRCd's IsSID); the four
+ * peer values come from the peer operator. Passwords: send_password is
+ * what we put in our PASS (= the peer's links.<us>.receive-password);
+ * receive_password is what the peer sends us (= its send-password).
+ */
+module
+{
+	name = "ts6link"
+	peer_name = "{{ ircd_ts6link_peer_name }}"
+	peer_sid = "{{ ircd_ts6link_peer_sid | upper }}"
+	peer_host = "{{ ircd_ts6link_peer_host }}"
+	peer_port = {{ ircd_ts6link_peer_port }}
+	peer_ssl = {{ ircd_ts6link_peer_ssl | ternary('yes', 'no') }}
+	send_password = "{{ vault_ircd_ts6link_send_password }}"
+	receive_password = "{{ vault_ircd_ts6link_receive_password }}"
+	retry_wait = {{ ircd_ts6link_retry_wait }}
+	description = "{{ ircd_ts6link_server_description }}"
+	/* yes logs every TS6 line sent and received to stdout. */
+	debug = no
+}

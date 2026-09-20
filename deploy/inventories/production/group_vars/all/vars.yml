@@ -362,6 +362,20 @@ ircd_bridgeserv_user_idle: 0
 # there is no roster to join.
 ircd_bridgeserv_use_presence: false
 
+# TS6 link bridge sidecar (ircfiber-ts6link, roles/ircd/tasks/ts6link.yml):
+# a second Anope from the same image, linked to the hub as an ordinary server
+# (link.ircfiber.com / 0TS), dialling the friend's ergo (waveplate/ergo
+# ts6-linking) as a TS6 peer. The four peer values come from the peer
+# operator, and the render task refuses empty placeholders — so the toggle
+# stays false until they are filled in, or every `make deploy-ircd` would
+# fail on the assert. Flip it to true in the same edit as the peer values.
+# Passwords: vault_ircd_ts6link_* (vault.example.yml).
+ircd_ts6link_enabled: false
+ircd_ts6link_peer_name: ""             # ergo server.name
+ircd_ts6link_peer_sid: ""              # ergo server.sid, ^[0-9][0-9A-Z]{2}$
+ircd_ts6link_peer_host: ""             # ergo host or IP (we dial them)
+ircd_ts6link_peer_port: 6697
+
 # Our own ircd's server name. Also here, not only in roles/ircd defaults,
 # because roles/engine's env.j2 needs it: the engine role runs in its own
 # play (hosts: ircfiber_engines) where the ircd role's defaults are not in

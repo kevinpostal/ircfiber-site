@@ -182,6 +182,19 @@ ircd_awaylen: 390
 ircd_kicklen: 390
 ircd_topiclen: 390
 ircd_softlimit: 20000
+# Maximum IRC line length (bytes, incl. CRLF). 512 is the RFC floor and InspIRCd's
+# minimum; 8192 matches the ergo peer's long-line support. Runtime, not compile
+# time: InspIRCd 4 has no MAXBUF constant (<limits maxline>, floor 512, no cap).
+# Every <connect recvq> must be >= this (inspircd.conf.j2 uses 8K/64K) and
+# <performance netbuffersize> (10240) must exceed it.
+ircd_maxline: 8192
+# Extend the nick charset beyond rfc1459 to match the ergo peer's
+# allowed-characters {irc-formatting: true, printable-glyphs: true}:
+# formatting bytes 0x02 0x03 0x04 0x0F 0x11 0x16 0x1D 0x1E 0x1F and every byte
+# 0x80-0xFF (raw UTF-8, byte-level, no sequence validation — InspIRCd's codepage
+# is single-byte). Link-compared: every InspIRCd peer (k3s leaf, irc.netcrave.chat)
+# must carry the identical table or its CAPAB fails; false restores the stock table.
+ircd_nick_charset_extended: true
 
 # Oper. `ircd_oper_name` is BOTH the /OPER login name in opers.conf.j2 and
 # the Anope `oper {}` block name in services.conf.j2 — and Anope resolves
@@ -214,6 +227,33 @@ ircd_services_root_extra_accounts:
 # volume carried over from it is re-owned by tasks/services.yml.)
 ircd_services_uid: 10000
 ircd_services_gid: 10000
+
+# --- TS6 link bridge sidecar (tasks/ts6link.yml) --------------------------
+# A second Anope 2.1 process from the same image, running only the ts6link
+# module: it links to the hub as an ORDINARY server (never u-lined) and
+# dials one ergo/charybdis-style TS6 peer, mirroring servers, users and
+# channels both ways. Nothing persistent lives in it (no database, no
+# pseudo clients).
+ircd_ts6link_enabled: false            # true in production group_vars once the peer is configured
+ircd_ts6link_server_name: "link.ircfiber.com"
+ircd_ts6link_server_description: "IRC Fiber TS6 link"
+# SID: digit-first like every SID on the network; outside the xFB (ircds) and
+# 00A+ (services + BridgeServ guild links) ranges.
+ircd_ts6link_server_id: "0TS"
+ircd_ts6link_net_alias: "ts6link"
+ircd_ts6link_container_name: "ircfiber-ts6link"
+ircd_ts6link_conf_dir: "/etc/ircfiber/ts6link"
+ircd_ts6link_memory_limit: "128m"
+ircd_ts6link_memory_reservation: "32m"
+ircd_ts6link_cpus: 0.5
+ircd_ts6link_oom_score_adj: 0          # first Anope to go under pressure; nothing persistent lives here
+# Peer (the ergo server). Values come from the peer operator.
+ircd_ts6link_peer_name: ""             # ergo server.name, e.g. irc.example.net
+ircd_ts6link_peer_sid: ""              # ergo server.sid — MUST match ^[0-9][0-9A-Z]{2}$ (InspIRCd requires a leading digit)
+ircd_ts6link_peer_host: ""
+ircd_ts6link_peer_port: 6697
+ircd_ts6link_peer_ssl: true            # ergo accepts links on its normal TLS client listener
+ircd_ts6link_retry_wait: "30s"
 
 # Dashboard oper for the admin web UI (Dashboard class: REHASH + STATS +
 # G/K/Z-LINE only, host-locked to the Docker network). Gateway reads the

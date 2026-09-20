@@ -34,10 +34,12 @@
 # The fork's branch, not anope/2.1: the image pins the exact commit that is
 # live, and the clone below only carries the history of the named branch, so
 # the branch must be the one the commit is on. Everything on it is submitted
-# upstream as pull requests from kevinpostal/anope.
+# upstream as pull requests from kevinpostal/anope. ts6link is
+# bridgeserv-mentions plus modules/ts6link (the TS6 link bridge that the
+# ircfiber-ts6link sidecar loads; tasks/ts6link.yml).
 ARG ANOPE_REPO=https://github.com/kevinpostal/anope.git
-ARG ANOPE_BRANCH=bridgeserv-mentions
-ARG ANOPE_COMMIT=0864139c9ebd71ac5098c3dc0c695266399dd833
+ARG ANOPE_BRANCH=ts6link
+ARG ANOPE_COMMIT=f6e46425b6747e1b34ff939ca5e8d6028cd4dae3
 
 # Debian, not alpine, and NOT interchangeable: on musl the vendored DPP
 # segfaults the moment Discord sends a guild with members. Its timestamp
@@ -94,25 +96,31 @@ COPY deploy/roles/ircd/files/anope-rpc-command-unregistered.patch \
      deploy/roles/ircd/files/anope-rpc-registered.patch \
      deploy/roles/ircd/files/anope-nickcore-registered-backfill.patch \
      /tmp/patches/
+# ssl_openssl lives in modules/extra/, which Anope's CMake deliberately
+# does not build ("copy or symlink files out of it"); the ts6link sidecar
+# dials its TLS peer through it, so it is copied into modules/ here. The
+# builder already has libssl-dev (DPP) and the runtime libssl3.
 RUN git clone --branch ${ANOPE_BRANCH} ${ANOPE_REPO} /anope-src \
  && git -C /anope-src checkout --detach ${ANOPE_COMMIT} \
  && git -C /anope-src apply --verbose \
       /tmp/patches/anope-rpc-command-unregistered.patch \
       /tmp/patches/anope-rpc-registered.patch \
-      /tmp/patches/anope-nickcore-registered-backfill.patch
+      /tmp/patches/anope-nickcore-registered-backfill.patch \
+ && cp /anope-src/modules/extra/ssl_openssl.cpp /anope-src/modules/ssl_openssl.cpp
 WORKDIR /anope-src
 # The `test -f` lines are the build gate. CMake skips a module whose
 # dependencies it cannot detect rather than failing the build, so without
 # them an OpenSSL or DPP detection failure would silently ship an Anope with
 # no bridge and only surface as a missing BridgeServ in prod. Every module
-# services.conf.j2 loads is listed: a missing one aborts the build here
-# instead of aborting services at start on the live network.
+# services.conf.j2 and ts6link.conf.j2 load is listed (ssl_openssl is what
+# the ts6link sidecar dials its TLS peer with): a missing one aborts the
+# build here instead of aborting services at start on the live network.
 RUN cmake -B build -D CMAKE_BUILD_TYPE=Release -D INSTDIR=/anope -G Ninja \
  && ninja -C build install \
  && test -f /anope/bin/anope \
  && for m in bridgeserv db_json db_flatfile enc_bcrypt enc_sha256 httpd jsonrpc \
              rpc_user rpc_data rpc_registered inspircd nickserv chanserv botserv \
-             hostserv memoserv operserv global fantasy help; do \
+             hostserv memoserv operserv global fantasy help ts6link ssl_openssl; do \
       test -f /anope/modules/$m.so || { echo "missing module $m.so" >&2; exit 1; }; \
     done
 

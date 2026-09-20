@@ -1,0 +1,124 @@
+---
+# IRC Fiber — TS6 link bridge sidecar (ircfiber-ts6link, link.ircfiber.com).
+#
+# A second Anope 2.1 process from the SAME image as services
+# (ircd_services_image — one image, two containers) running only the
+# ts6link module (modules/ts6link on the kevinpostal/anope ts6link branch).
+# It links to the hub as an ordinary, never u-lined server and dials the
+# friend's ergo (waveplate/ergo ts6-linking) as a TS6 peer, mirroring
+# servers, users and channels both ways. Separate process on purpose:
+# InspIRCd never routes a message back over the link it arrived on, so a
+# module inside ircfiber-services would never see NickServ/BotServ/
+# BridgeServ traffic destined for ergo users.
+#
+# Nothing persistent lives here: no database, no data volume, no pseudo
+# clients. Included from tasks/services.yml when ircd_ts6link_enabled, so
+# both `make deploy-ircd` and `make ship-services` keep it in sync.
+
+- name: Preflight — ts6link peer and passwords must be set
+  ansible.builtin.assert:
+    that:
+      - vault_ircd_ts6link_link_password is defined
+      - vault_ircd_ts6link_link_password | length >= 16
+      - vault_ircd_ts6link_link_password != "REPLACE-WITH-RANDOM-32-CHARS"
+      - vault_ircd_ts6link_send_password is defined
+      - vault_ircd_ts6link_send_password | length > 0
+      - vault_ircd_ts6link_send_password != "REPLACE"
+      - vault_ircd_ts6link_receive_password is defined
+      - vault_ircd_ts6link_receive_password | length > 0
+      - vault_ircd_ts6link_receive_password != "REPLACE"
+      - ircd_ts6link_peer_name | length > 0
+      - ircd_ts6link_peer_sid | upper is match("^[0-9][0-9A-Z]{2}$")
+      - ircd_ts6link_peer_host | length > 0
+    fail_msg: |
+      The TS6 link bridge is enabled (ircd_ts6link_enabled) but not
+      configured. Set ircd_ts6link_peer_name / _peer_sid (a TS6 SID with a
+      leading digit — InspIRCd rejects any other) / _peer_host in
+      inventories/production/group_vars/all/vars.yml, and
+      vault_ircd_ts6link_link_password (>= 16 chars), _send_password and
+      _receive_password in inventories/production/group_vars/vault.yml:
+        ansible-vault edit inventories/production/group_vars/vault.yml
+
+- name: Ensure ts6link config dir exists
+  ansible.builtin.file:
+    path: "{{ ircd_ts6link_conf_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render ts6link config
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ ircd_ts6link_conf_dir }}/{{ item.dest }}"
+    owner: "{{ ircd_container_uid }}"
+    group: "{{ ircd_container_uid }}"
+    mode: "0640"
+  loop:
+    - { src: ts6link.conf.j2, dest: ts6link.conf }
+    - { src: motd.j2, dest: services.motd }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Restart ts6link
+
+- name: Run ircfiber-ts6link (Anope 2.1 + ts6link)
+  community.docker.docker_container:
+    name: "{{ ircd_ts6link_container_name }}"
+    image: "{{ ircd_services_image }}"
+    # Same reasoning as the services container: recreate on a new image
+    # id, never on a new tag string for the same id (the two deploy paths
+    # name the same image differently).
+    image_name_mismatch: ignore
+    state: started
+    restart_policy: "{{ ircd_restart_policy }}"
+    networks:
+      - name: "{{ docker_ircfiber_network }}"
+        aliases:
+          - "{{ ircd_ts6link_net_alias }}"
+          - "{{ ircd_ts6link_server_name }}"
+    networks_cli_compatible: true
+    volumes:
+      # 2.1 reads conf/anope.conf; the host file keeps the role's name.
+      - "{{ ircd_ts6link_conf_dir }}/ts6link.conf:/anope/conf/anope.conf:ro"
+      - "{{ ircd_ts6link_conf_dir }}/services.motd:/anope/conf/services.motd:ro"
+    # No data volume: nothing persistent lives here.
+    memory: "{{ ircd_ts6link_memory_limit }}"
+    memory_reservation: "{{ ircd_ts6link_memory_reservation }}"
+    cpus: "{{ ircd_ts6link_cpus | float }}"
+    oom_score_adj: "{{ ircd_ts6link_oom_score_adj | int }}"
+    healthcheck:
+      # Process check only, as for services: both links (to the hub and to
+      # the peer) are outbound and their absence is normal during a
+      # netsplit. The uplink assertion below is the real check.
+      test: ["CMD-SHELL", "grep -q anope /proc/1/comm"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      com.ircfiber.component: "ts6link"
+      com.ircfiber.version: "{{ ircfiber_version }}"
+      com.ircfiber.server_name: "{{ ircd_ts6link_server_name }}"
+
+# The container being up says nothing about the link: a wrong
+# vault_ircd_ts6link_link_password leaves a healthy container that never
+# joins the network. Anope's own "Successfully connected to uplink"
+# (src/uplink.cpp) is the proof the hub accepted it. Only the log since the
+# current container start is inspected.
+- name: Assert ts6link linked to the hub
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      started="$(docker inspect -f '{{ "{{" }}.State.StartedAt{{ "}}" }}' \
+        {{ ircd_ts6link_container_name }})"
+      docker logs --since "$started" {{ ircd_ts6link_container_name }} 2>&1 \
+        | grep -q 'Successfully connected to uplink' || {
+        echo "ircfiber-ts6link has not reported 'Successfully connected to uplink' yet."
+        exit 1
+      }
+      echo OK
+  register: ircd_ts6link_uplink_ok
+  until: ircd_ts6link_uplink_ok.rc == 0
+  retries: 6
+  delay: 10
+  changed_when: false

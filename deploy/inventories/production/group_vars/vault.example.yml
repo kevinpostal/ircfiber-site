@@ -71,6 +71,14 @@ vault_ircd_services_rpc_token: "REPLACE-WITH-RANDOM-48-CHARS"
 # (Retired: vault_ircd_bridge_link_password and vault_ircd_bridge_rpc_token
 # belonged to the bridge sidecar. One server now — one link password above,
 # one RPC token here.)
+# --- TS6 link bridge (ircfiber-ts6link) ----------------------------------------
+# InspIRCd <link> password for the bridge's own server link (hub side).
+vault_ircd_ts6link_link_password: "REPLACE-WITH-RANDOM-32-CHARS"
+# TS6 handshake passwords with the ergo peer. send = what we put in our PASS
+# (= peer's links.<us>.receive-password); receive = what the peer sends us
+# (= peer's links.<us>.send-password).
+vault_ircd_ts6link_send_password: "REPLACE"
+vault_ircd_ts6link_receive_password: "REPLACE"
 
 # Host-cloak HMAC key (>= 30 chars). Changing it invalidates existing
 # cloak-based channel bans.
