@@ -100,6 +100,12 @@ WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./frontend/
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
     cd frontend && npm ci --ignore-scripts
+# esbuild's postinstall fetches its platform binary; --ignore-scripts above
+# (kept so playwright etc. don't download browsers) skips it, and the build
+# then fails with "@esbuild/linux-x64 could not be found". Rebuild esbuild
+# alone: correct binary for this arch, version pinned by the lockfile.
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    cd frontend && npm rebuild esbuild
 COPY frontend/bun.lock* frontend/tsconfig.json frontend/svelte.config.js frontend/vite.config.ts frontend/index.html frontend/admin.html frontend/postbuild.js ./frontend/
 COPY frontend/src ./frontend/src/
 COPY frontend/wasm-img2irc ./frontend/wasm-img2irc/
