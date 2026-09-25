@@ -36,7 +36,7 @@
   const isJoinPart = $derived(['JOIN','PART','QUIT','NICK','CHGHOST','KICK','AWAY','JOINPART_GROUP','DISCO_GROUP'].includes(cmd));
   const isLifecycle = $derived(['CONNECT', 'DISCONNECT', 'DISCONNECTED'].includes(cmd));
   const isDisconnectDivider = $derived(cmd === 'DISCONNECT' || cmd === 'DISCONNECTED');
-  const isSystem = $derived(['TOPIC','CONNECT','DISCONNECT','DISCONNECTED','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick));
+  const isSystem = $derived(['TOPIC','CONNECT','DISCONNECT','DISCONNECTED','ERROR','MODE','CAP','FAIL','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick));
   const isAction = $derived(msg.type === 'action');
   // Server-log progress entries from the engine carry a `phase` tag. We
   // expose both a boolean (for styling) and the raw phase (for the

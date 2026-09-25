@@ -1455,7 +1455,7 @@ final class BncClient {
             Json[] evs;
             try evs = ctx.messageRepo.getWindow(serverId, networkId, name, 0, 0, n, true);
             catch (Exception e) { logWarn("bnc: playback fetch failed for %s/%s: %s", networkId, name, e.msg); continue; }
-            foreach (ev; evs) if (isChatRow(ev)) rows ~= ev;
+            foreach (ev; evs) if (isChatRow(ev) || isBncRedactRow(ev)) rows ~= ev;
             if (++i % 10 == 0) yield();
         }
         logInfo("bnc: playback user=%s network=%s server=%s buffers=%d lines=%d rows=%d",
@@ -1679,7 +1679,7 @@ final class BncClient {
         Json[] keep;
         bool[string] seen;
         foreach (ev; rows) {
-            if (!isChatRow(ev)) continue;
+            if (!isChatRow(ev) && !isBncRedactRow(ev)) continue;
             const dk = dedupeKey(ev);
             if (dk in seen) continue;
             seen[dk] = true;

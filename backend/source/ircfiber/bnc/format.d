@@ -194,6 +194,13 @@ string formatEvent(Json ev, FormatCtx c) @trusted {
     }
 
     if (cmd == "JOIN" && params.length == 3 && !c.has("extended-join")) params = params[0 .. 1];
+    // REDACT rows persist the reason in `x` while `p` holds only
+    // [target, msgid] — reattach it as the trailing parameter so the
+    // relay keeps the `REDACT <target> <msgid> [<reason>]` shape.
+    // Skipped when `x` already is the last param (the engine stores the
+    // trailing wire param in both `p` and `x`, so a reason-less row has
+    // `x` == msgid and must NOT gain a duplicate).
+    if (cmd == "REDACT" && text.length && (params.length == 0 || params[$ - 1] != text)) params ~= text;
     if (cmd == "353" && params.length >= 4) {
         import std.string : split, join;
         string[] adapted;

@@ -29,6 +29,12 @@
 <module name="ircv3_invitenotify">
 <module name="ircv3_labeledresponse">
 <module name="ircv3_msgid">
+# Third-party (ours): IRCv3 draft/message-redaction — REDACT <target> <msgid> [:reason].
+# Authors always; +o/+a/+q and opers with channels/redact-message may redact others in channels.
+# maxlines/maxduration bound the per-channel msgid ring; older msgids answer UNKNOWN_MSGID.
+# roles/ircd/files/messageredaction, built into ircd_image; VF_NONE like motdpool.
+<module name="messageredaction">
+<messageredaction maxlines="1000" maxduration="1w">
 <module name="ircv3_servertime">
 <module name="monitor">
 <monitor maxentries="64">

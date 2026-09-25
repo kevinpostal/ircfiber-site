@@ -46,7 +46,7 @@ import {
 	applyRetryStatus,
 	applyFail,
 	applySetname,
-	markRedacted,
+	applyRedaction,
 	applyReaction,
 	findMessage,
 	requestChannelList,
@@ -4039,8 +4039,8 @@ describe('applySetname (IRCv3 setname)', () => {
 	});
 });
 
-describe('markRedacted (draft/message-redaction)', () => {
-	it('tombstones the row by msgid and reports true', () => {
+describe('applyRedaction (draft/message-redaction)', () => {
+	it('tombstones the row by msgid with attribution and reports true', () => {
 		const net = createNetwork({ networkId: 'net1' });
 		net.buffers.push(createBuffer({ name: '#chan' }));
 		ircState.networks.push(net);
@@ -4049,36 +4049,111 @@ describe('markRedacted (draft/message-redaction)', () => {
 			createMessage({ nick: 'bob', text: 'hi', msgid: 'm2' }),
 		];
 
-		expect(markRedacted('net1', '#chan', 'm1', 'oops')).toBe(true);
+		expect(applyRedaction('net1', '#chan', { msgid: 'm1', by: 'op', reason: 'oops', t: 1 })).toBe(true);
 		flushSync();
 
 		const list = untrack(() => ircState.messages['net1:#chan']);
-		expect(list[0].text).toBe('[message deleted: oops]');
+		expect(list[0].text).toBe('[message deleted by op]: oops');
 		expect(list[0].redacted).toBe(true);
 		expect(list[0].redactReason).toBe('oops');
+		expect(list[0].redactedBy).toBe('op');
 		expect(list[1].text).toBe('hi');
 	});
 
-	it('renders a bare tombstone without a reason', () => {
+	it('renders a bare tombstone without a reason or nick', () => {
 		const net = createNetwork({ networkId: 'net1' });
 		net.buffers.push(createBuffer({ name: '#chan' }));
 		ircState.networks.push(net);
 		ircState.messages['net1:#chan'] = [createMessage({ nick: 'alice', text: 'x', msgid: 'm9' })];
 
-		expect(markRedacted('net1', '#chan', 'm9', '')).toBe(true);
+		expect(applyRedaction('net1', '#chan', { msgid: 'm9', by: '', reason: '', t: 1 })).toBe(true);
 
 		const list = untrack(() => ircState.messages['net1:#chan']);
 		expect(list[0].text).toBe('[message deleted]');
 	});
 
-	it('returns false when the msgid is unknown', () => {
+	it('stashes an unknown msgid instead of appending a row', () => {
 		const net = createNetwork({ networkId: 'net1' });
 		net.buffers.push(createBuffer({ name: '#chan' }));
 		ircState.networks.push(net);
 		ircState.messages['net1:#chan'] = [createMessage({ msgid: 'm1' })];
 
-		expect(markRedacted('net1', '#chan', 'nope', '')).toBe(false);
+		expect(applyRedaction('net1', '#chan', { msgid: 'nope', by: 'op', reason: '', t: 1 })).toBe(false);
 		expect(untrack(() => ircState.messages['net1:#chan']).length).toBe(1);
+	});
+
+	it('folds a REDACT history row onto the row it names', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#c' }));
+		ircState.networks.push(net);
+
+		setMessages('net1', '#c', [
+			createMessage({ nick: 'alice', text: 'hello', msgid: 'a1', t: 1000 }),
+			createMessage({ nick: 'op', command: 'REDACT', text: 'spam', params: ['#c', 'a1', 'spam'], t: 2000 }),
+		]);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#c']);
+		expect(list.length).toBe(1);
+		expect(list[0].redacted).toBe(true);
+		expect(list[0].redactedBy).toBe('op');
+		expect(list[0].text).toBe('[message deleted by op]: spam');
+	});
+
+	it('drains a stashed REDACT when the target row arrives on an older page', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#c' }));
+		ircState.networks.push(net);
+
+		setMessages('net1', '#c', [
+			createMessage({ nick: 'op', command: 'REDACT', text: '', params: ['#c', 'old-1'], t: 2000 }),
+			createMessage({ nick: 'stanzi', text: 'later', msgid: 'new-1', t: 3000 }),
+		]);
+		flushSync();
+		expect(untrack(() => ircState.messages['net1:#c']).length).toBe(1);
+
+		prependMessages('net1', '#c', [
+			createMessage({ nick: 'stanzi', text: 'older line', msgid: 'old-1', t: 1000 }),
+		]);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#c']);
+		expect(list.map(m => m.msgid)).toEqual(['old-1', 'new-1']);
+		expect(list[0].redacted).toBe(true);
+		expect(list[0].redactedBy).toBe('op');
+		expect(list[0].text).toBe('[message deleted by op]');
+	});
+
+	it('re-applying a REDACT to a tombstone is a no-op', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.messages['net1:#chan'] = [createMessage({ nick: 'alice', text: 'x', msgid: 'm1' })];
+
+		expect(applyRedaction('net1', '#chan', { msgid: 'm1', by: 'op', reason: 'spam', t: 1 })).toBe(true);
+		const first = untrack(() => ircState.messages['net1:#chan'])[0];
+		expect(applyRedaction('net1', '#chan', { msgid: 'm1', by: 'op', reason: 'spam', t: 2 })).toBe(true);
+		const second = untrack(() => ircState.messages['net1:#chan'])[0];
+		expect(second).toBe(first);
+		expect(second.text).toBe('[message deleted by op]: spam');
+	});
+
+	it('normalizes a stored FAIL REDACT row into the live system-row shape', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#c' }));
+		ircState.networks.push(net);
+
+		setMessages('net1', '#c', [
+			createMessage({ nick: 'alice', text: 'hello', msgid: 'a1', t: 1000 }),
+			createMessage({ nick: 'test.local', command: 'FAIL', text: 'You are not authorised to delete this message',
+				params: ['REDACT', 'REDACT_FORBIDDEN', '#c', 'a1', 'You are not authorised to delete this message'], t: 2000 }),
+		]);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#c']);
+		expect(list.length).toBe(2);
+		expect(list[1].nick).toBeUndefined();
+		expect(list[1].text).toBe('Could not delete message: You are not authorised to delete this message');
 	});
 });
 

@@ -3,7 +3,7 @@ import { WHOIS_FAMILY } from './serverLogGroups';
 import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail, applyChannelListChunk,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping, clearTypingForNick, resetTypingStreak,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
-         checkHighlight, isMessageUnseen, applySetname, applyAccountChange, markRedacted, applyReaction,
+         checkHighlight, isMessageUnseen, applySetname, applyAccountChange, applyRedaction, applyReaction, failRedactText,
          markMemberBot,
          findBufferByName, isSelfMessage, renameQueryBuffer, isSessionFocused } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getLastSeen, getBottomSeen } from '../stores/preferences.svelte';
@@ -614,16 +614,30 @@ export function processIrcEvent(
     if (newRealname) applySetname(networkId, msg.nick, newRealname);
   }
   // ── REDACT — tombstone by msgid ──
-  // `REDACT <target> <msgid> [<reason>]`. When the original row is in
-  // the buffer, replace it with a tombstone and swallow the REDACT;
-  // otherwise let it append so the deletion stays visible.
-  if (cmd === 'REDACT' && msg.params && msg.params.length >= 2) {
-    const targetMsgid = msg.params[1] || '';
-    const reason = msg.text || (msg.params[2] ?? '');
+  // `REDACT <target> <msgid> [<reason>]`. `channel` is the engine-resolved
+  // buffer (Step 3 routes DMs correctly); `params[0]` is not consulted.
+  // Unknown msgids are stashed for later history, never rendered.
+  if (cmd === 'REDACT') {
+    const targetMsgid = msg.params?.[1] || '';
     if (targetMsgid) {
-      const redactBuf = normalizeChannelName(msg.params[0] || channel);
-      if (markRedacted(networkId, redactBuf, targetMsgid, reason)) return {};
+      applyRedaction(networkId, channel, {
+        // The reason is params[2] only: the engine copies the trailing
+        // wire param into `text`, which is the msgid itself when the
+        // REDACT carries no reason — using text here would tombstone
+        // `[message deleted by <nick>]: <msgid>`.
+        msgid: targetMsgid, by: msg.nick ?? '', reason: msg.params?.[2] || '', t: msg.t ?? Date.now(),
+      });
     }
+    return {}; // never a row: unknown msgids are stashed (spec: ignore), malformed lines dropped
+  }
+  // ── FAIL REDACT — surfacing ──
+  // `FAIL REDACT <code> <target> … :<text>` renders as a system row in
+  // the target buffer so a denied Delete is visible where it happened.
+  // (failAppend is declared below, so pick the path the same way here.)
+  if (cmd === 'FAIL' && msg.params?.[0] === 'REDACT') {
+    const failAppend: AppendFn = shouldBypassBatcher(msg, channel) ? defaultAppend : append;
+    failAppend(networkId, channel, { ...msg, nick: undefined, text: failRedactText(msg) });
+    return {};
   }
   // ── ACCOUNT — state only, never a row ──
   // account-notify is identity bookkeeping: it fires for every user who

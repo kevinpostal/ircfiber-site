@@ -148,6 +148,18 @@ private void testFormatEvent() {
     check(formatEvent(parseJsonString(`{"c":"QUIT","n":"bob","hm":"u@h","ch":"#c","x":"bye","p":["bye"]}`), c) == "", "QUIT with ch dropped");
     auto quit = formatEvent(parseJsonString(`{"c":"QUIT","n":"bob","hm":"u@h","x":"bye","p":["bye"],"t":1700000000123}`), c);
     check(quit == "@time=2023-11-14T22:13:20.123Z :bob!u@h QUIT bye", "QUIT forwarded: " ~ quit);
+    // REDACT with the cap → relayed with the reason as trailing text.
+    auto redact = parseJsonString(`{"c":"REDACT","n":"op","hm":"u@h","p":["#c","abc"],"x":"spam","t":1700000000123}`);
+    check(formatEvent(redact, ctx("server-time", "draft/message-redaction"))
+        == "@time=2023-11-14T22:13:20.123Z :op!u@h REDACT #c abc spam", "REDACT relayed: " ~ formatEvent(redact, ctx("server-time", "draft/message-redaction")));
+    // Engine shape without a reason (`x` echoes the trailing msgid):
+    // relayed bare, never duplicated.
+    auto redactBare = parseJsonString(`{"c":"REDACT","n":"op","hm":"u@h","p":["#c","abc"],"x":"abc","t":1700000000123}`);
+    check(formatEvent(redactBare, ctx("server-time", "draft/message-redaction"))
+        == "@time=2023-11-14T22:13:20.123Z :op!u@h REDACT #c abc", "REDACT bare relayed: " ~ formatEvent(redactBare, ctx("server-time", "draft/message-redaction")));
+    check(formatEvent(redact, ctx("server-time")) == "", "REDACT hidden without the cap");
+    check(isBncRedactRow(redact), "REDACT row replays");
+    check(!isBncRedactRow(parseJsonString(`{"c":"PRIVMSG"}`)), "PRIVMSG is not a redact row");
 
     // Own labeled message, no echo-message → drop.
     auto own = parseJsonString(`{"c":"PRIVMSG","n":"me","hm":"u@h","se":"true","l":"bnc-deadbeef-1","p":["#c","hi"],"x":"hi","ch":"#c","t":1}`);

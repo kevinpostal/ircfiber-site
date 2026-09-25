@@ -476,3 +476,65 @@ describe('ACCOUNT updates members without a row', () => {
     expect(member.account).toBe('');
   });
 });
+
+describe('REDACT and FAIL REDACT (draft/message-redaction)', () => {
+  beforeEach(() => {
+    ircState.networks.length = 0;
+    ircState.activeBuffer.networkId = null;
+    ircState.activeBuffer.bufferName = null;
+    ircState.messages = {};
+    ircState.processedMessages = {};
+  });
+
+  function setup() {
+    const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: '#c', isJoined: true }));
+    ircState.networks.push(net);
+    ircState.messages['n1:#c'] = [createMessage({ nick: 'alice', text: 'hello', msgid: 'a1' })];
+  }
+
+  function run(data: Record<string, unknown>) {
+    const appended: IRCMessage[] = [];
+    processIrcEvent(
+      data, { value: 0 },
+      { whoisAcc: null, whoisAccs: new Map(), banAcc: [], banTargetChannel: '' },
+      { switchToBuffer: () => {} },
+      (_n, _b, m) => { appended.push(m); },
+    );
+    return appended;
+  }
+
+  it('tombstones a known msgid and appends nothing', () => {
+    setup();
+    const appended = run({ c: 'REDACT', n: 'op', p: ['#c', 'a1', 'spam'], x: 'spam', ch: '#c', nid: 'n1' });
+    expect(appended).toEqual([]);
+    const row = untrack(() => ircState.messages['n1:#c'])[0];
+    expect(row.redacted).toBe(true);
+    expect(row.redactedBy).toBe('op');
+    expect(row.text).toBe('[message deleted by op]: spam');
+  });
+
+  it('ignores text when the REDACT carries no reason (engine echoes the msgid as text)', () => {
+    setup();
+    const appended = run({ c: 'REDACT', n: 'op', p: ['#c', 'a1'], x: 'a1', ch: '#c', nid: 'n1' });
+    expect(appended).toEqual([]);
+    const row = untrack(() => ircState.messages['n1:#c'])[0];
+    expect(row.text).toBe('[message deleted by op]');
+    expect(row.redactReason).toBeUndefined();
+  });
+
+  it('appends nothing for an unknown msgid (stashed per spec)', () => {
+    setup();
+    const appended = run({ c: 'REDACT', n: 'op', p: ['#c', 'nope'], ch: '#c', nid: 'n1' });
+    expect(appended).toEqual([]);
+    expect(untrack(() => ircState.messages['n1:#c'])).toHaveLength(1);
+  });
+
+  it('surfaces FAIL REDACT as a nick-less system row in the target buffer', () => {
+    setup();
+    const appended = run({ c: 'FAIL', p: ['REDACT', 'REDACT_FORBIDDEN', '#c', 'a1'], x: 'You are not authorised to delete this message', ch: '#c', nid: 'n1' });
+    expect(appended).toHaveLength(1);
+    expect(appended[0].text).toBe('Could not delete message: You are not authorised to delete this message');
+    expect(appended[0].nick).toBeUndefined();
+  });
+});

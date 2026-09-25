@@ -583,6 +583,18 @@ bool isBncChatRow(Json ev) @safe {
     return ev["phase"].type == Json.Type.undefined;
 }
 
+/// True for a `REDACT` row the bouncer may replay (same phase-less shape
+/// as a chat row). The reason travels in `x`, like every other command's
+/// trailing text — `formatEvent` appends it (see `ircfiber.bnc.format`).
+bool isBncRedactRow(Json ev) @safe {
+    if (ev.type != Json.Type.object) return false;
+    if (auto c = "c" in ev) {
+        if (c.type != Json.Type.string) return false;
+        if (c.get!string != "REDACT") return false;
+    } else return false;
+    return ev["phase"].type == Json.Type.undefined;
+}
+
 /// Filters a `getAfterEidForNetwork` page down to what a reconnecting
 /// client actually missed. Backfill copies of messages the client already
 /// saw live carry fresh eids but old timestamps — those (and only those)

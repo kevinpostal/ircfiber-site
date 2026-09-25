@@ -86,7 +86,7 @@
   }
   /** Two clicks: the label flips to "Confirm delete" first. No reason is
    *  sent (the spec forbids a default one); the tombstone comes from the
-   *  server's relayed REDACT (markRedacted), nothing optimistic. */
+   *  server's relayed REDACT (applyRedaction), nothing optimistic. */
   function del(): void {
     if (!confirmDelete) { confirmDelete = true; return; }
     sendRaw(target.networkId, `REDACT ${target.bufferName} ${target.msg.msgid}`);

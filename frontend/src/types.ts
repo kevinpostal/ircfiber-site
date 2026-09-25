@@ -483,6 +483,8 @@ export interface IRCMessage {
   redacted?: boolean;
   /** Redaction reason from `REDACT <target> <msgid> [<reason>]`. */
   redactReason?: string;
+  /** Nick that issued the REDACT (tombstone attribution). */
+  redactedBy?: string;
   /** msgid of the message this one answers (IRCv3 `+reply`, wire `data.rp`). */
   replyTo?: string;
   /** Reactions on this row, emoji -> nicks in arrival order (IRCv3

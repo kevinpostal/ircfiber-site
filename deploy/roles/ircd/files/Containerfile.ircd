@@ -1,5 +1,6 @@
-# IRC Fiber ircd image: upstream InspIRCd 4 plus one third-party module
-# (motdpool, deploy/roles/ircd/files/motdpool/m_motdpool.cpp).
+# IRC Fiber ircd image: upstream InspIRCd 4 plus two third-party modules
+# (motdpool, deploy/roles/ircd/files/motdpool/m_motdpool.cpp;
+# messageredaction, deploy/roles/ircd/files/messageredaction/m_messageredaction.cpp).
 #
 # This is a pinned mirror of inspircd/inspircd-docker's Dockerfile at
 # DOCKER_REPO_COMMIT, not a `FROM inspircd/inspircd-docker` derivative: the
@@ -9,8 +10,8 @@
 # built from the INSPIRCD_TAG tag, and conf/ + entrypoint.sh come from the
 # pinned inspircd-docker commit. Everything upstream (uid 10000, /conf
 # defaults, entrypoint, healthcheck) is kept; the only delta is
-# m_motdpool.so. When bumping, diff against upstream's Dockerfile at the new
-# commit and carry over any drift.
+# m_motdpool.so + m_messageredaction.so. When bumping, diff against
+# upstream's Dockerfile at the new commit and carry over any drift.
 #
 # Build context is the site repo root (what the root Makefile's SHIP_SH
 # passes), so the COPY path is repo-relative:
@@ -28,14 +29,16 @@ RUN git clone --branch ${INSPIRCD_TAG} --depth 1 https://github.com/inspircd/ins
  && git clone https://github.com/inspircd/inspircd-docker.git /inspircd-docker \
  && git -C /inspircd-docker checkout --detach ${DOCKER_REPO_COMMIT}
 COPY deploy/roles/ircd/files/motdpool/m_motdpool.cpp /inspircd-src/src/modules/
+COPY deploy/roles/ircd/files/messageredaction/m_messageredaction.cpp /inspircd-src/src/modules/
 WORKDIR /inspircd-src
-# The two `test -f` lines are the build gate: m_motdpool.so proves the new
-# module compiled; m_ssl_gnutls.so proves configure auto-enabled the one
+# The `test -f` lines are the build gate: m_motdpool.so and
+# m_messageredaction.so prove our modules compiled; m_ssl_gnutls.so proves configure auto-enabled the one
 # extra prod loads. Either failing to build would otherwise only surface as
 # a module load error in prod.
 RUN ./configure --prefix /inspircd --example-dir /inspircd/examples --uid 10000 --gid 10000 \
  && make -j"$(getconf _NPROCESSORS_ONLN)" install \
  && test -f /inspircd/modules/m_motdpool.so \
+ && test -f /inspircd/modules/m_messageredaction.so \
  && test -f /inspircd/modules/m_ssl_gnutls.so \
  && rm -rf /inspircd/conf/*
 
