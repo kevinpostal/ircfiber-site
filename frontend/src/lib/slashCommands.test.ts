@@ -43,7 +43,6 @@ vi.mock('/src/stores/api', () => ({
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
 	sendRaw: vi.fn(),
 	sendMessage: vi.fn(),
-	sendEditMessage: vi.fn(),
 	sendJson: vi.fn(),
 	sendRequest: vi.fn(async () => null),
 	requestSync: vi.fn(),

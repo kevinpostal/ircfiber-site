@@ -29,7 +29,6 @@ vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
   disconnectWebSocket: vi.fn(),
   sendRaw: vi.fn(),
   sendMessage: vi.fn(),
-  sendEditMessage: vi.fn(),
   requestSync: vi.fn(),
   requestSwitchBuffer: vi.fn(),
   sendJson: vi.fn(),

@@ -538,3 +538,57 @@ describe('REDACT and FAIL REDACT (draft/message-redaction)', () => {
     expect(appended[0].nick).toBeUndefined();
   });
 });
+
+describe('EDIT and FAIL EDIT (draft/edit-message)', () => {
+  beforeEach(() => {
+    ircState.networks.length = 0;
+    ircState.activeBuffer.networkId = null;
+    ircState.activeBuffer.bufferName = null;
+    ircState.messages = {};
+    ircState.processedMessages = {};
+  });
+
+  function setup() {
+    const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: '#c', isJoined: true }));
+    ircState.networks.push(net);
+    ircState.messages['n1:#c'] = [createMessage({ nick: 'alice', text: 'hello', msgid: 'a1' })];
+  }
+
+  function run(data: Record<string, unknown>) {
+    const appended: IRCMessage[] = [];
+    processIrcEvent(
+      data, { value: 0 },
+      { whoisAcc: null, whoisAccs: new Map(), banAcc: [], banTargetChannel: '' },
+      { switchToBuffer: () => {} },
+      (_n, _b, m) => { appended.push(m); },
+    );
+    return appended;
+  }
+
+  it('folds a live edit into the row it names and appends nothing', () => {
+    setup();
+    const appended = run({ c: 'PRIVMSG', n: 'alice', x: 'fixed', eo: 'a1', ch: '#c', nid: 'n1' });
+    expect(appended).toEqual([]);
+    const row = untrack(() => ircState.messages['n1:#c'])[0];
+    expect(row.msgid).toBe('a1');
+    expect(row.text).toBe('fixed');
+    expect(row.edited).toBe(true);
+  });
+
+  it('stashes an edit for an unknown msgid and appends nothing', () => {
+    setup();
+    const appended = run({ c: 'PRIVMSG', n: 'alice', x: 'fixed', eo: 'nope', ch: '#c', nid: 'n1' });
+    expect(appended).toEqual([]);
+    expect(untrack(() => ircState.messages['n1:#c'])).toHaveLength(1);
+    expect(untrack(() => ircState.messages['n1:#c'])[0].text).toBe('hello');
+  });
+
+  it('surfaces FAIL EDIT as a nick-less system row in the target buffer', () => {
+    setup();
+    const appended = run({ c: 'FAIL', p: ['EDIT', 'EDIT_FORBIDDEN', '#c', 'a1'], x: 'You can only edit your own messages', ch: '#c', nid: 'n1' });
+    expect(appended).toHaveLength(1);
+    expect(appended[0].text).toBe('Could not edit message: You can only edit your own messages');
+    expect(appended[0].nick).toBeUndefined();
+  });
+});

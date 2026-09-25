@@ -212,9 +212,7 @@ export interface MessageActionsTarget {
 export interface EditRequest {
   networkId: string;
   bufferName: string;
-  eid?: number;
-  msgid?: string;
-  label: string;
+  msgid: string;
   body: string;
 }
 
@@ -1366,26 +1364,174 @@ function foldRedactions(key: string, list: IRCMessage[], items: RedactionItem[])
   }
   return out ?? list;
 }
+/**
+ * One edit waiting to be folded into the row `msgid` names. `text` is the
+ * replacement body, `t` the edit's own timestamp (last write wins).
+ */
+export interface EditItem {
+  msgid: string;
+  text: string;
+  t: number;
+}
+
+/** `original` with `item`'s text applied and marked `edited`. Idempotent:
+ *  an already-redacted row is never edited (returns `original`), and the
+ *  same text applied twice returns the same object, so a replayed edit
+ *  or a history page carrying it never rewrites the row. The row keeps
+ *  its original msgid/eid. */
+export function editedRow(original: IRCMessage, item: EditItem): IRCMessage {
+  if (original.redacted) return original;
+  if (original.edited && original.text === item.text) return original;
+  if (!original.edited && original.text === item.text) return original;
+  return { ...original, text: item.text, edited: true };
+}
+
+/** Edits whose target row is not loaded. An edit can name a message far
+ *  older than the window, and history arrives newest-page first, so the
+ *  row it belongs to may only show up several pages of scroll-back
+ *  later — or when the buffer is opened for the first time. Bounded and
+ *  FIFO: one that never finds its row costs a single entry until
+ *  eviction. Keyed `<bufKey>\0<msgid>`. */
+const pendingEdits = new Map<string, EditItem[]>();
+const MAX_PENDING_EDIT_ROWS = 256;
+const MAX_PENDING_EDIT_PER_ROW = 32;
+
+function stashEdit(key: string, item: EditItem): void {
+  const k = `${key}\u0000${item.msgid}`;
+  const queued = pendingEdits.get(k);
+  if (queued) {
+    if (queued.length < MAX_PENDING_EDIT_PER_ROW) queued.push(item);
+    return;
+  }
+  pendingEdits.set(k, [item]);
+  if (pendingEdits.size > MAX_PENDING_EDIT_ROWS) {
+    const oldest = pendingEdits.keys().next().value;
+    if (oldest !== undefined) pendingEdits.delete(oldest);
+  }
+}
+
+/** Edits stashed for any of `list`'s rows, removed from the stash.
+ *  Returned rather than applied so the caller folds page and stash in
+ *  one pass. */
+function takePendingEdits(key: string, list: IRCMessage[]): EditItem[] {
+  if (pendingEdits.size === 0) return [];
+  const drained: EditItem[] = [];
+  for (const m of list) {
+    if (!m.msgid) continue;
+    const k = `${key}\u0000${m.msgid}`;
+    const queued = pendingEdits.get(k);
+    if (!queued) continue;
+    drained.push(...queued);
+    pendingEdits.delete(k);
+  }
+  return drained;
+}
+
+/**
+ * Apply an edit (IRCv3 `draft/edit-message`) to the row whose msgid it
+ * names. Found → text replaced in place; not loaded → stashed and
+ * applied when the row arrives. Idempotent, so the echo of our own edit
+ * re-applies harmlessly. Returns true when a loaded row was edited;
+ * false when the original is unknown (caller still skips appending the
+ * edit itself — it is never a timeline row — and the stash holds it
+ * for later).
+ */
+export function applyEdit(networkId: string, bufferName: string, item: EditItem): boolean {
+  if (!item.msgid) return false;
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  const list = ircState.messages[key] ?? [];
+  const idx = list.findIndex((m: IRCMessage) => m.msgid === item.msgid);
+  if (idx < 0) {
+    stashEdit(key, item);
+    return false;
+  }
+  const original = list[idx];
+  const updated = editedRow(original, item);
+  if (updated === original) return true;
+  list[idx] = updated;
+  ircState.messages[key] = [...list];
+  const replaced = ircState.processedMessages[key]
+    ? replaceInProcessedBuffer(ircState.processedMessages[key], original, updated)
+    : null;
+  ircState.processedMessages[key] = replaced ?? buildProcessedBuffer([...list]);
+  return true;
+}
+
+/** Splits the edit rows out of a history page: they are state for the
+ *  row `editOf` names, never rows of their own. Returns `msgs` itself
+ *  when the page has none, which is the common case. */
+function takeEditRows(msgs: IRCMessage[]): { rows: IRCMessage[]; edits: EditItem[] } {
+  let rows: IRCMessage[] | null = null;
+  const edits: EditItem[] = [];
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (m.editOf) {
+      if (!rows) rows = msgs.slice(0, i);
+      edits.push({ msgid: m.editOf, text: m.text ?? '', t: m.t ?? 0 });
+    } else if (rows) {
+      rows.push(m);
+    }
+  }
+  return { rows: rows ?? msgs, edits };
+}
+
+/** Folds `items` into `list`, oldest edit first (last wins), stashing
+ *  the ones whose target row is not in `list`. Returns `list` itself
+ *  when nothing applied, so callers can keep their incremental
+ *  processed-buffer path. */
+function foldEdits(key: string, list: IRCMessage[], items: EditItem[]): IRCMessage[] {
+  if (items.length === 0) return list;
+  const ordered = items.length > 1 ? [...items].sort((a, b) => a.t - b.t) : items;
+  const idxByMsgid = new Map<string, number>();
+  for (let i = 0; i < list.length; i++) {
+    const id = list[i].msgid;
+    if (id && !idxByMsgid.has(id)) idxByMsgid.set(id, i);
+  }
+  let out: IRCMessage[] | null = null;
+  for (const item of ordered) {
+    const idx = idxByMsgid.get(item.msgid);
+    if (idx === undefined) {
+      stashEdit(key, item);
+      continue;
+    }
+    const target = (out ?? list)[idx];
+    const updated = editedRow(target, item);
+    if (updated === target) continue;
+    if (!out) out = [...list];
+    out[idx] = updated;
+  }
+  return out ?? list;
+}
+
 /** Prefix for surfaced `FAIL REDACT` rows, shared with the live branch
  *  in messageHandler so realtime and history renders match. */
 export const FAIL_REDACT_PREFIX = 'Could not delete message: ';
+/** Prefix for surfaced `FAIL EDIT` rows, shared with the live branch
+ *  in messageHandler so realtime and history renders match. */
+export const FAIL_EDIT_PREFIX = 'Could not edit message: ';
 
-/** System-row text for a `FAIL REDACT` row. Idempotent: rows the live
- *  branch already rewrote pass through unchanged. */
+/** System-row text for a `FAIL REDACT` or `FAIL EDIT` row. Idempotent:
+ *  rows the live branch already rewrote pass through unchanged. */
 export function failRedactText(msg: IRCMessage): string {
   const params = msg.params ?? [];
+  const isEdit = params[0] === 'EDIT';
+  const prefix = isEdit ? FAIL_EDIT_PREFIX : FAIL_REDACT_PREFIX;
   const text = msg.text || params[1] || 'unknown error';
-  return text.startsWith(FAIL_REDACT_PREFIX) ? text : FAIL_REDACT_PREFIX + text;
+  if (text.startsWith(prefix)) return text;
+  if (!isEdit && text.startsWith(FAIL_EDIT_PREFIX)) return text;
+  if (isEdit && text.startsWith(FAIL_REDACT_PREFIX)) return text;
+  return prefix + text;
 }
 
-/** Rewrites stored `FAIL REDACT` rows into the same nick-less system rows
- *  the live branch appends (the engine persists them raw: server nick,
- *  bare text). Returns `list` itself when no row needs it. */
+/** Rewrites stored `FAIL REDACT` / `FAIL EDIT` rows into the same nick-less
+ *  system rows the live branch appends (the engine persists them raw:
+ *  server nick, bare text). Returns `list` itself when no row needs it. */
 function foldFailRedacts(list: IRCMessage[]): IRCMessage[] {
   let out: IRCMessage[] | null = null;
   for (let i = 0; i < list.length; i++) {
     const m = list[i];
-    if (m.command !== 'FAIL' || (m.params ?? [])[0] !== 'REDACT') continue;
+    const kind = (m.params ?? [])[0];
+    if (m.command !== 'FAIL' || (kind !== 'REDACT' && kind !== 'EDIT')) continue;
     const text = failRedactText(m);
     if (m.nick === undefined && m.text === text) continue;
     if (!out) out = [...list];
@@ -1464,9 +1610,10 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     }
   }
 
-  // Edit-echo label match: when sendEditMessage re-uses the original
-  // label, the echo arrives with that same label but the optimistic
-  // entry was already consumed by the first echo. Replace in-place.
+  // Label match for a second echo of the same send: the echo arrives
+  // with that same label but the optimistic entry was already consumed
+  // by the first echo. Replace in-place. (Edits never reach here with
+  // a label — they carry `editOf` and fold via applyEdit upstream.)
   if (msg.label) {
     const idx = list.findIndex((m: IRCMessage) => m.label === msg.label);
     if (idx >= 0) {
@@ -2500,13 +2647,16 @@ export function setMessages(networkId: string, bufferName: string, msgs: IRCMess
   // Redaction rows are state, not timeline entries: pull them out of the
   // page and fold them into the rows they name, after the reactions.
   const { rows: rows2, redactions } = takeRedactRows(rows);
+  // Edit rows are state, not timeline entries: pull them out of the
+  // page and fold them into the rows they name, after the redactions.
+  const { rows: rows3, edits } = takeEditRows(rows2);
   // Dedup within the incoming batch — history can contain the same
   // msgid twice with different eids (e.g. 65ZsMF… as 225503 and
   // 223472). The old setMessages stored both and rendered twice.
   const seenEids = new Set<number>();
   const seenMsgids = new Set<string>();
   const deduped: IRCMessage[] = [];
-  for (const m of rows2) {
+  for (const m of rows3) {
     if ((m.eid != null && seenEids.has(m.eid)) || (m.msgid && seenMsgids.has(m.msgid))) continue;
     if (m.eid != null) seenEids.add(m.eid);
     if (m.msgid) seenMsgids.add(m.msgid);
@@ -2515,7 +2665,9 @@ export function setMessages(networkId: string, bufferName: string, msgs: IRCMess
   // FIFO cap: keep only the newest MAX_JS_MESSAGES (bounds GC + cold preprocess to ≤1ms for 5k).
   const cappedRows = deduped.length > MAX_JS_MESSAGES ? deduped.slice(-MAX_JS_MESSAGES) : deduped;
   const reacted = foldReactions(key, cappedRows, [...reactions, ...takePendingReactions(key, cappedRows)]);
-  const capped = foldFailRedacts(foldRedactions(key, reacted, [...redactions, ...takePendingRedactions(key, reacted)]));
+  const redacted = foldRedactions(key, reacted, [...redactions, ...takePendingRedactions(key, reacted)]);
+  const edited = foldEdits(key, redacted, [...edits, ...takePendingEdits(key, redacted)]);
+  const capped = foldFailRedacts(edited);
   ircState.messages[key] = capped;
   ircState.processedMessages[key] = buildProcessedBuffer(capped);
   saveMessageCache(key, capped);
@@ -2546,6 +2698,7 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
   // still further back (then they wait in the stash).
   const { rows, reactions } = takeReactionRows(msgs);
   const { rows: rows2, redactions } = takeRedactRows(rows);
+  const { rows: rows3, edits } = takeEditRows(rows2);
 
   // Dedupe against existing messages AND within the new batch. eid is the
   // primary key (IRCCloud-style: every event gets a global sequential
@@ -2569,7 +2722,7 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
   // is already in `existing` — replace it in place instead of appending a
   // second copy. Matches by label (labeled-response echoes the label back)
   // or by text+nick+command within 30s against a pending optimistic.
-  for (const m of rows2) {
+  for (const m of rows3) {
     if (m.eid == null && !m.msgid) continue; // only echo-shaped entries replace
     let matchIdx = -1;
     if (m.label) {
@@ -2601,7 +2754,7 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
   }
 
   const filtered: IRCMessage[] = [];
-  for (const m of rows2) {
+  for (const m of rows3) {
     if ((m.eid != null && eidSet.has(m.eid)) || (m.msgid && dedupKeys.has(m.msgid))) continue;
     if (m.eid != null) eidSet.add(m.eid);
     if (m.msgid) {
@@ -2635,7 +2788,9 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
     return (a.msgid ?? '').localeCompare(b.msgid ?? '');
   });
   const reacted = foldReactions(key, merged, [...reactions, ...takePendingReactions(key, merged)]);
-  const folded = foldFailRedacts(foldRedactions(key, reacted, [...redactions, ...takePendingRedactions(key, reacted)]));
+  const redacted = foldRedactions(key, reacted, [...redactions, ...takePendingRedactions(key, reacted)]);
+  const edited = foldEdits(key, redacted, [...edits, ...takePendingEdits(key, redacted)]);
+  const folded = foldFailRedacts(edited);
   // FIFO cap: if prepend pushes over limit, keep newest MAX_JS_MESSAGES. Bounds prependReprocess (≤1ms for 5k).
   let finalMessages = folded;
   let finalProcessed: IRCMessage[];
@@ -2643,8 +2798,9 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
     finalMessages = folded.slice(-MAX_JS_MESSAGES);
     finalProcessed = buildProcessedBuffer(finalMessages);
   } else if (folded !== merged) {
-    // A reaction or redaction rewrote row objects, and the incremental
-    // path would reuse the pre-fold copies held by `existing` / `filtered`.
+    // A reaction, redaction, or edit rewrote row objects, and the
+    // incremental path would reuse the pre-fold copies held by
+    // `existing` / `filtered`.
     finalProcessed = buildProcessedBuffer(finalMessages);
   } else {
     // Prepending changes the head boundary in ways that can't be fixed

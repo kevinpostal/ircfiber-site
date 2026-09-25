@@ -3,7 +3,7 @@ import { WHOIS_FAMILY } from './serverLogGroups';
 import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail, applyChannelListChunk,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping, clearTypingForNick, resetTypingStreak,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
-         checkHighlight, isMessageUnseen, applySetname, applyAccountChange, applyRedaction, applyReaction, failRedactText,
+         checkHighlight, isMessageUnseen, applySetname, applyAccountChange, applyRedaction, applyEdit, applyReaction, failRedactText,
          markMemberBot,
          findBufferByName, isSelfMessage, renameQueryBuffer, isSessionFocused } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getLastSeen, getBottomSeen } from '../stores/preferences.svelte';
@@ -613,6 +613,17 @@ export function processIrcEvent(
     const newRealname = msg.text || (msg.params?.[msg.params.length - 1] ?? '');
     if (newRealname) applySetname(networkId, msg.nick, newRealname);
   }
+  // ── EDIT — fold into the row `editOf` names ──
+  // A message with `editOf` is NEVER a timeline row: it replaces the
+  // text of the row whose msgid it names (own echo AND remote edits
+  // arrive this way). Unknown msgids are stashed for later history,
+  // never rendered, and never bump unread or notify.
+  if (msg.editOf) {
+    applyEdit(networkId, channel, {
+      msgid: msg.editOf, text: msg.text ?? '', t: msg.t ?? Date.now(),
+    });
+    return {};
+  }
   // ── REDACT — tombstone by msgid ──
   // `REDACT <target> <msgid> [<reason>]`. `channel` is the engine-resolved
   // buffer (Step 3 routes DMs correctly); `params[0]` is not consulted.
@@ -630,11 +641,12 @@ export function processIrcEvent(
     }
     return {}; // never a row: unknown msgids are stashed (spec: ignore), malformed lines dropped
   }
-  // ── FAIL REDACT — surfacing ──
+  // ── FAIL REDACT / FAIL EDIT — surfacing ──
   // `FAIL REDACT <code> <target> … :<text>` renders as a system row in
   // the target buffer so a denied Delete is visible where it happened.
+  // `FAIL EDIT …` renders the same way for a denied edit.
   // (failAppend is declared below, so pick the path the same way here.)
-  if (cmd === 'FAIL' && msg.params?.[0] === 'REDACT') {
+  if (cmd === 'FAIL' && (msg.params?.[0] === 'REDACT' || msg.params?.[0] === 'EDIT')) {
     const failAppend: AppendFn = shouldBypassBatcher(msg, channel) ? defaultAppend : append;
     failAppend(networkId, channel, { ...msg, nick: undefined, text: failRedactText(msg) });
     return {};

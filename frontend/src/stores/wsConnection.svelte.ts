@@ -416,10 +416,6 @@ export function sendMessage(
   doSend(JSON.stringify({ cmd: 'msg', network: networkId, target, text, label, tags }));
 }
 
-export function sendEditMessage(networkId: string, target: string, text: string, originalLabel: string): void {
-  doSend(JSON.stringify({ cmd: 'editmsg', network: networkId, target, text, label: originalLabel }));
-}
-
 /** Fire-and-forget JSON send (no response expected). */
 export function sendJson(data: Record<string, unknown>): void {
   doSend(JSON.stringify(data));

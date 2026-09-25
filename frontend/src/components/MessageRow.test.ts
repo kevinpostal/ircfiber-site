@@ -41,6 +41,22 @@ describe('MessageRow', () => {
 		await expect.element(page.getByText('hello world')).toBeInTheDocument();
 	});
 
+	it('renders a muted (edited) marker on edited chat rows only', async () => {
+		render(MessageRow, { props: { msg: createMessage({ nick: 'alice', text: 'fixed', edited: true }) } });
+		const marker = document.querySelector('.content .edited') as HTMLElement | null;
+		expect(marker).toBeInTheDocument();
+		expect(marker?.textContent).toContain('(edited)');
+		expect(marker?.title).toBe('edited');
+
+		document.body.innerHTML = '';
+		render(MessageRow, { props: { msg: createMessage({ nick: 'alice', text: 'plain' }) } });
+		expect(document.querySelector('.edited')).toBeNull();
+
+		document.body.innerHTML = '';
+		render(MessageRow, { props: { msg: createMessage({ nick: '', command: 'FAIL', text: 'Could not edit message: nope', edited: true }) } });
+		expect(document.querySelector('.edited')).toBeNull();
+	});
+
 	it('renders the avatar outside authorWrap so it is not clipped', async () => {
 		const msg = createMessage({ nick: 'alice', text: 'hello world' });
 		render(MessageRow, { props: { msg } });

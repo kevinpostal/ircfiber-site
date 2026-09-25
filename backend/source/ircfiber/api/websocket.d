@@ -1349,16 +1349,6 @@ final class WebSocketGateway {
                     }
                     routeCommand(networkId, serverId, c);
                     break;
-                case "editmsg":
-                    auto editTarget = json["target"].get!string;
-                    auto editText = json["text"].get!string;
-                    auto ec = IRCCommand("editmsg", editTarget, editText);
-                    ec.timestampMs = Clock.currTime.toUnixTime!long * 1000;
-                    if (json["label"].type != Json.Type.undefined) {
-                        ec.label = json["label"].get!string;
-                    }
-                    routeCommand(networkId, serverId, ec);
-                    break;
                 case "join":
                     auto channel = json["channel"].get!string;
                     auto c = IRCCommand("join", channel, "");

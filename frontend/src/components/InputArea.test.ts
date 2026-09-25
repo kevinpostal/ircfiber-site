@@ -72,12 +72,10 @@ describe('InputArea', () => {
 	// assignable and still types the toHaveBeenCalledWith assertions.
 	let mockSendMessage: Mock;
 	let mockSendRaw: Mock;
-	let mockSendEditMessage: Mock;
 
 	beforeEach(() => {
 		mockSendMessage = vi.fn();
 		mockSendRaw = vi.fn();
-		mockSendEditMessage = vi.fn();
 	});
 
 	it('renders textarea', async () => {
@@ -609,10 +607,10 @@ describe('InputArea', () => {
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = '#general';
-		recordSentMessage('net1', '#general', { label: 'abc', body: 'hello world' });
+		recordSentMessage('net1', '#general', { label: 'abc', body: 'hello world', msgid: 'm1' });
 		flushSync();
 
-		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw, onSendEditMessage: mockSendEditMessage } });
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
 		const textarea = page.getByRole('textbox', { name: /message input/i });
 		const el = textarea.element() as HTMLTextAreaElement;
 
@@ -623,32 +621,29 @@ describe('InputArea', () => {
 		expect(el.value).toBe('[edit] hello world');
 	});
 
-	it('adopts a row Edit request into the edit state, clears it, and sends with the row label', async () => {
+	it('Ctrl+ArrowUp resolves the msgid from the settled row when the echo has not recorded one', async () => {
 		globalPrefs.featureFlags.editMessage.enabled = true;
 		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
 		net.buffers.push(createBuffer({ name: '#general' }));
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = '#general';
+		// A plain send records only the label; the echoed row carries the msgid.
+		recordSentMessage('net1', '#general', { label: 'abc', body: 'hello world' });
+		ircState.messages['net1:#general'] = [createMessage({ nick: 'tester', text: 'hello world', msgid: 'm1', label: 'abc' })];
 		flushSync();
 
-		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw, onSendEditMessage: mockSendEditMessage } });
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
 		const textarea = page.getByRole('textbox', { name: /message input/i });
 		const el = textarea.element() as HTMLTextAreaElement;
 
-		ircState.editRequest = { networkId: 'net1', bufferName: '#general', label: 'l1', body: 'old text' };
+		await userEvent.keyboard('{Control>}{Meta>}{ArrowUp}{/Meta}{/Control}');
 		flushSync();
 
-		expect(el.value).toBe('[edit] old text');
-		expect(ircState.editRequest).toBeNull();
-
-		await vi.waitFor(() => expect(document.activeElement).toBe(el));
-		await userEvent.keyboard(' more{Enter}');
-		expect(mockSendEditMessage).toHaveBeenCalledWith('net1', '#general', 'old text more', 'l1');
-		expect(el.value).toBe('');
+		expect(el.value).toBe('[edit] hello world');
 	});
 
-	it('Ctrl+Cmd+Up with non-empty input does nothing', async () => {
+	it('Ctrl+ArrowUp does nothing when no msgid can be resolved', async () => {
 		globalPrefs.featureFlags.editMessage.enabled = true;
 		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
 		net.buffers.push(createBuffer({ name: '#general' }));
@@ -658,7 +653,58 @@ describe('InputArea', () => {
 		recordSentMessage('net1', '#general', { label: 'abc', body: 'hello world' });
 		flushSync();
 
-		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw, onSendEditMessage: mockSendEditMessage } });
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		await userEvent.keyboard('{Control>}{Meta>}{ArrowUp}{/Meta}{/Control}');
+		flushSync();
+
+		expect(el.value).toBe('');
+	});
+
+	it('adopts a row Edit request into the edit state, clears it, and sends with the +draft/edit tag', async () => {
+		globalPrefs.featureFlags.editMessage.enabled = true;
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		ircState.messages['net1:#general'] = [createMessage({ nick: 'tester', text: 'old text', msgid: 'm1' })];
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		ircState.editRequest = { networkId: 'net1', bufferName: '#general', msgid: 'm1', body: 'old text' };
+		flushSync();
+
+		expect(el.value).toBe('[edit] old text');
+		expect(ircState.editRequest).toBeNull();
+
+		await vi.waitFor(() => expect(document.activeElement).toBe(el));
+		await userEvent.keyboard(' more{Enter}');
+		expect(mockSendMessage).toHaveBeenCalledWith('net1', '#general', 'old text more', undefined, { '+draft/edit': 'm1' });
+		expect(el.value).toBe('');
+		// Optimistic: the row text is replaced in place, keeping its msgid.
+		const row = untrack(() => ircState.messages['net1:#general'])[0];
+		expect(row.text).toBe('old text more');
+		expect(row.edited).toBe(true);
+		expect(row.msgid).toBe('m1');
+	});
+
+	it('Ctrl+Cmd+Up with non-empty input does nothing', async () => {
+		globalPrefs.featureFlags.editMessage.enabled = true;
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		recordSentMessage('net1', '#general', { label: 'abc', body: 'hello world', msgid: 'm1' });
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
 		const textarea = page.getByRole('textbox', { name: /message input/i });
 		const el = textarea.element() as HTMLTextAreaElement;
 
@@ -673,17 +719,18 @@ describe('InputArea', () => {
 		expect(el.value).toBe('already typing');
 	});
 
-	it('sends edit message via onSendEditMessage with original label and strips [edit] prefix', async () => {
+	it('sends the edit via onSendMessage with the +draft/edit tag and strips [edit] prefix', async () => {
 		globalPrefs.featureFlags.editMessage.enabled = true;
 		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
 		net.buffers.push(createBuffer({ name: '#general' }));
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = '#general';
-		recordSentMessage('net1', '#general', { label: 'origLabel', body: 'original text' });
+		recordSentMessage('net1', '#general', { label: 'origLabel', body: 'original text', msgid: 'm1' });
+		ircState.messages['net1:#general'] = [createMessage({ nick: 'tester', text: 'original text', msgid: 'm1', label: 'origLabel' })];
 		flushSync();
 
-		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw, onSendEditMessage: mockSendEditMessage } });
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
 		const textarea = page.getByRole('textbox', { name: /message input/i });
 		const el = textarea.element() as HTMLTextAreaElement;
 
@@ -701,22 +748,27 @@ describe('InputArea', () => {
 		await userEvent.keyboard('{Enter}');
 		flushSync();
 
-		// Should call onSendEditMessage with stripped [edit] prefix and original label
-		expect(mockSendEditMessage).toHaveBeenCalledWith('net1', '#general', 'original text edited', 'origLabel');
+		// The edit goes out as a normal message with the +draft/edit tag; the
+		// row text is updated optimistically in place.
+		expect(mockSendMessage).toHaveBeenCalledWith('net1', '#general', 'original text edited', undefined, { '+draft/edit': 'm1' });
 		expect(el.value).toBe('');
+		const row = untrack(() => ircState.messages['net1:#general'])[0];
+		expect(row.text).toBe('original text edited');
+		expect(row.edited).toBe(true);
 	});
 
-	it('clears editTarget after sending edit message', async () => {
+	it('clears editTarget after sending the edit so the next send is a normal message', async () => {
 		globalPrefs.featureFlags.editMessage.enabled = true;
 		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
 		net.buffers.push(createBuffer({ name: '#general' }));
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = '#general';
-		recordSentMessage('net1', '#general', { label: 'abc', body: 'first message' });
+		recordSentMessage('net1', '#general', { label: 'abc', body: 'first message', msgid: 'm1' });
+		ircState.messages['net1:#general'] = [createMessage({ nick: 'tester', text: 'first message', msgid: 'm1', label: 'abc' })];
 		flushSync();
 
-		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw, onSendEditMessage: mockSendEditMessage } });
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
 		const textarea = page.getByRole('textbox', { name: /message input/i });
 		const el = textarea.element() as HTMLTextAreaElement;
 
@@ -728,10 +780,13 @@ describe('InputArea', () => {
 
 		// After sending, input is cleared
 		expect(el.value).toBe('');
+		expect(mockSendMessage).toHaveBeenCalledWith('net1', '#general', 'first message', undefined, { '+draft/edit': 'm1' });
 
-		// Ctrl+Cmd+Up again should NOT prefill (no editTarget, and lastSent was not
-		// updated because edit path didn't generate a new label via recordSentMessage
-		// in this test — but actually it does call recordSentMessage)
+		// The next send is a plain message with no edit tag.
+		await userEvent.type(textarea, 'fresh line');
+		await userEvent.keyboard('{Enter}');
+		flushSync();
+		expect(mockSendMessage).toHaveBeenLastCalledWith('net1', '#general', 'fresh line', expect.any(String));
 	});
 
 	it('lastSentMessageForBuffer returns null when no message sent to the buffer', async () => {

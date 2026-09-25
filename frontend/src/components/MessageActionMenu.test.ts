@@ -54,42 +54,43 @@ beforeEach(() => {
 });
 
 describe('MessageActionMenu — Edit', () => {
-	it('offers Edit only on our own last-sent message when draft/edit-message is negotiated', async () => {
+	it('offers Edit on any own row with a msgid when draft/edit-message is negotiated', async () => {
 		setup(['message-tags', 'draft/edit-message']);
-		// A plain send records only the label; the echoed row carries it.
-		recordSentMessage('net1', '#chan', { label: 'l1', body: 'hi' });
-		open(createMessage({ nick: 'me', text: 'hi', msgid: 'dc-1', label: 'l1' }));
+		open(createMessage({ nick: 'me', text: 'hi', msgid: 'dc-1' }));
 
 		expect(item('edit')).toBeInTheDocument();
 		item('edit')!.click();
 		flushSync();
 
 		expect(ircState.editRequest).toEqual({
-			networkId: 'net1', bufferName: '#chan', label: 'l1', body: 'hi', msgid: undefined, eid: undefined,
+			networkId: 'net1', bufferName: '#chan', msgid: 'dc-1', body: 'hi',
 		});
 		expect(ircState.messageActions).toBeNull();
 	});
 
-	it('matches by msgid after an edit recorded it', async () => {
+	it('offers Edit on an earlier own message too (not just the last sent)', async () => {
 		setup(['message-tags', 'draft/edit-message']);
-		recordSentMessage('net1', '#chan', { label: 'l1', body: 'hi again', msgid: 'dc-1' });
-		open(createMessage({ nick: 'me', text: 'hi again', msgid: 'dc-1' }));
+		recordSentMessage('net1', '#chan', { label: 'l2', body: 'later', msgid: 'dc-2' });
+		open(createMessage({ nick: 'me', text: 'hi', msgid: 'dc-1' }));
 		expect(item('edit')).toBeInTheDocument();
 	});
 
-	it('hides Edit on an earlier own message, on someone else\'s message, and without the cap', async () => {
+	it('hides Edit on someone else\'s message, on redacted rows, on rows without a msgid, and without the cap', async () => {
 		setup(['message-tags', 'draft/edit-message']);
-		recordSentMessage('net1', '#chan', { label: 'l2', body: 'later' });
-		open(createMessage({ nick: 'me', text: 'hi', msgid: 'dc-1', label: 'l1' }));
+		open(createMessage({ nick: 'alice', text: 'later', msgid: 'dc-2' }));
 		expect(item('edit')).toBeNull();
 
 		document.body.innerHTML = '';
-		open(createMessage({ nick: 'alice', text: 'later', msgid: 'dc-2', label: 'l2' }));
+		open(createMessage({ nick: 'me', text: 'gone', msgid: 'dc-3', redacted: true }));
+		expect(item('edit')).toBeNull();
+
+		document.body.innerHTML = '';
+		open(createMessage({ nick: 'me', text: 'pending' }));
 		expect(item('edit')).toBeNull();
 
 		document.body.innerHTML = '';
 		ircState.networks[0].capabilities = new Set(['message-tags']);
-		open(createMessage({ nick: 'me', text: 'later', msgid: 'dc-2', label: 'l2' }));
+		open(createMessage({ nick: 'me', text: 'later', msgid: 'dc-2' }));
 		expect(item('edit')).toBeNull();
 	});
 });

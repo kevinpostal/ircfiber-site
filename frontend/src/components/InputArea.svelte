@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer, lastSentMessageForBuffer, recordSentMessage, requestForceScrollToBottom, archiveBuffer, markUserDisconnected, beginConnectAttempt, getTempUnavailable, initiateRejoin, appendMessage, clearReplyTarget, clearReactTarget, clearEditRequest, applyReaction, type ReactTarget } from '../stores/ircStore.svelte';
-  import { sendMessage, sendRaw, sendEditMessage } from '../stores/wsConnection.svelte.ts';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer, lastSentMessageForBuffer, recordSentMessage, requestForceScrollToBottom, archiveBuffer, markUserDisconnected, beginConnectAttempt, getTempUnavailable, initiateRejoin, appendMessage, clearReplyTarget, clearReactTarget, clearEditRequest, applyEdit, applyReaction, type ReactTarget } from '../stores/ircStore.svelte';
+  import { sendMessage, sendRaw } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
   import { getSlashHandler } from '../lib/slashCommands';
   import { TabCompletionEngine, recentHighlightersCache, replacementFor, mentionCandidates, mentionFragmentAt } from '../lib/tabCompletion';
@@ -28,13 +28,12 @@
   interface Props {
     onSendMessage?: (...args: any[]) => any;
     onSendRaw?: (...args: any[]) => any;
-    onSendEditMessage?: (...args: any[]) => any;
   }
-  let { onSendMessage = sendMessage, onSendRaw = sendRaw, onSendEditMessage = sendEditMessage }: Props = $props();
+  let { onSendMessage = sendMessage, onSendRaw = sendRaw }: Props = $props();
 
   let textarea: HTMLTextAreaElement;
   let inputValue = $state('');
-  let editTarget = $state<{ eid?: number; msgid?: string; label: string } | null>(null);
+  let editTarget = $state<{ msgid: string } | null>(null);
   let uploadMenuOpen = $state(false);
   /// The style editor is a window inside `.messages-area` (owned by
   /// ChatArea), so the gear only routes to it. The half-typed message is
@@ -589,9 +588,17 @@
       e.preventDefault();
       if (inputValue === '' && globalPrefs.featureFlags.editMessage.enabled) {
         const last = lastSentMessageForBuffer(ircState.activeBuffer);
-        if (last) {
+        // Resolve the msgid of the last sent message: recorded directly
+        // when the echo carried one, else via the settled row that still
+        // carries the send label. No msgid anywhere → nothing to edit.
+        let msgid = last?.msgid;
+        if (!msgid && last && ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) {
+          const key = `${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`;
+          msgid = (ircState.messages[key] ?? []).find(m => m.label === last.label)?.msgid;
+        }
+        if (last && msgid) {
           inputValue = '[edit] ' + last.body;
-          editTarget = { eid: last.eid, msgid: last.msgid, label: last.label };
+          editTarget = { msgid };
         }
       }
       return;
@@ -798,7 +805,10 @@
       return;
     }
 
-    // Edit message path (Ctrl/Cmd+Up)
+    // Edit message path (Ctrl/Cmd+Up or a row's Edit action): the edit
+    // goes out as a NORMAL message carrying the `+draft/edit` client tag
+    // naming the row being edited; the server relay + own echo fold back
+    // via applyEdit. The row keeps its original msgid.
     if (editTarget) {
       getCurrentHistory().push(text);
       // Strip [edit] prefix added by the Ctrl/Cmd+Up handler
@@ -806,17 +816,12 @@
       if (text.startsWith(editPrefix)) {
         text = text.slice(editPrefix.length).trimStart();
       }
-      const editLabel = editTarget.label;
-      onSendEditMessage(networkId, target, text, editLabel);
-      recordSentMessage(networkId, target, { label: editLabel, body: text, eid: editTarget.eid, msgid: editTarget.msgid });
+      const msgid = editTarget.msgid;
+      onSendMessage(networkId, target, text, undefined, { '+draft/edit': msgid });
       // Optimistic: update the existing message text in-place
-      const key = `${networkId}:${target}`;
-      const list = ircState.messages[key] ?? [];
-      const idx = list.findIndex(m => m.label === editLabel);
-      if (idx >= 0) {
-        list[idx] = { ...list[idx], text };
-        ircState.messages[key] = list;
-      }
+      applyEdit(networkId, target, { msgid, text, t: Date.now() });
+      const last = lastSentMessageForBuffer({ networkId, bufferName: target });
+      recordSentMessage(networkId, target, { label: last?.label ?? '', body: text, msgid });
       editTarget = null;
       inputValue = '';
       void autoResizeAfterClear();
@@ -824,7 +829,22 @@
     }
 
     getCurrentHistory().push(text);
-    if (text.startsWith('/')) {
+    // Literal-slash escapes (standard IRC client convention):
+    //   "//foo"    -> sends "/foo" as a message
+    //   "/say foo" -> sends "foo" as a message
+    //   "/" or "/ foo" (no command word) -> sent verbatim as a message
+    let literal = false;
+    if (text.startsWith('//')) {
+      text = text.slice(1);
+      literal = true;
+    } else if (/^\/say(\s|$)/i.test(text)) {
+      text = text.slice(4).trim();
+      literal = true;
+      if (!text) { inputValue = ''; void autoResizeAfterClear(); return; }
+    } else if (/^\/(\s|$)/.test(text)) {
+      literal = true;
+    }
+    if (!literal && text.startsWith('/')) {
       const parts = text.slice(1).split(/\s+/);
       const cmd = parts[0].toLowerCase();
       const args = parts.slice(1);
@@ -1192,7 +1212,7 @@
     if (r.networkId !== ircState.activeBuffer.networkId) return;
     if (normalizeChannelName(r.bufferName) !== normalizeChannelName(ircState.activeBuffer.bufferName || '')) return;
     inputValue = '[edit] ' + r.body;
-    editTarget = { eid: r.eid, msgid: r.msgid, label: r.label };
+    editTarget = { msgid: r.msgid };
     clearEditRequest();
     tick().then(() => textarea?.focus());
   });

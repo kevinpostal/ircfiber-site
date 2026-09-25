@@ -47,6 +47,7 @@ import {
 	applyFail,
 	applySetname,
 	applyRedaction,
+	applyEdit,
 	applyReaction,
 	findMessage,
 	requestChannelList,
@@ -112,7 +113,6 @@ vi.mock('/src/stores/api', () => ({
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
 	sendRaw: vi.fn(),
 	sendMessage: vi.fn(),
-	sendEditMessage: vi.fn(),
 	sendJson: vi.fn(),
 	sendRequest: vi.fn(async () => null),
 	requestSync: vi.fn(),
@@ -4154,6 +4154,113 @@ describe('applyRedaction (draft/message-redaction)', () => {
 		expect(list.length).toBe(2);
 		expect(list[1].nick).toBeUndefined();
 		expect(list[1].text).toBe('Could not delete message: You are not authorised to delete this message');
+	});
+});
+
+describe('applyEdit (draft/edit-message)', () => {
+	it('folds an edit history row onto the row it names, keeping the original msgid', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#c' }));
+		ircState.networks.push(net);
+
+		setMessages('net1', '#c', [
+			createMessage({ nick: 'alice', text: 'hello', msgid: 'a1', t: 1000 }),
+			createMessage({ nick: 'alice', text: 'hello!', msgid: 'e1', editOf: 'a1', t: 2000 }),
+		]);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#c']);
+		expect(list.length).toBe(1);
+		expect(list[0].msgid).toBe('a1');
+		expect(list[0].text).toBe('hello!');
+		expect(list[0].edited).toBe(true);
+	});
+
+	it('drains a stashed edit when the target row arrives on an older page', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#c' }));
+		ircState.networks.push(net);
+
+		setMessages('net1', '#c', [
+			createMessage({ nick: 'alice', text: 'fixed', msgid: 'e-old', editOf: 'old-1', t: 2000 }),
+			createMessage({ nick: 'stanzi', text: 'later', msgid: 'new-1', t: 3000 }),
+		]);
+		flushSync();
+		expect(untrack(() => ircState.messages['net1:#c']).length).toBe(1);
+
+		prependMessages('net1', '#c', [
+			createMessage({ nick: 'alice', text: 'original', msgid: 'old-1', t: 1000 }),
+		]);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#c']);
+		expect(list.map(m => m.msgid)).toEqual(['old-1', 'new-1']);
+		expect(list[0].text).toBe('fixed');
+		expect(list[0].edited).toBe(true);
+	});
+
+	it('applyEdit on a redacted row is a no-op', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.messages['net1:#chan'] = [createMessage({ nick: 'alice', text: 'x', msgid: 'm1' })];
+
+		expect(applyRedaction('net1', '#chan', { msgid: 'm1', by: 'op', reason: 'spam', t: 1 })).toBe(true);
+		const tombstone = untrack(() => ircState.messages['net1:#chan'])[0];
+		expect(applyEdit('net1', '#chan', { msgid: 'm1', text: 'sneaky', t: 2 })).toBe(true);
+		const after = untrack(() => ircState.messages['net1:#chan'])[0];
+		expect(after).toBe(tombstone);
+		expect(after.redacted).toBe(true);
+	});
+
+	it('two edits apply in t order, last wins', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#c' }));
+		ircState.networks.push(net);
+
+		setMessages('net1', '#c', [
+			createMessage({ nick: 'alice', text: 'v1', msgid: 'a1', t: 1000 }),
+			createMessage({ nick: 'alice', text: 'v3', msgid: 'e2', editOf: 'a1', t: 3000 }),
+			createMessage({ nick: 'alice', text: 'v2', msgid: 'e1', editOf: 'a1', t: 2000 }),
+		]);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#c']);
+		expect(list.length).toBe(1);
+		expect(list[0].text).toBe('v3');
+		expect(list[0].edited).toBe(true);
+	});
+
+	it('re-applying the same edit text is idempotent', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.messages['net1:#chan'] = [createMessage({ nick: 'alice', text: 'x', msgid: 'm1' })];
+
+		expect(applyEdit('net1', '#chan', { msgid: 'm1', text: 'y', t: 1 })).toBe(true);
+		const first = untrack(() => ircState.messages['net1:#chan'])[0];
+		expect(applyEdit('net1', '#chan', { msgid: 'm1', text: 'y', t: 2 })).toBe(true);
+		const second = untrack(() => ircState.messages['net1:#chan'])[0];
+		expect(second).toBe(first);
+		expect(second.text).toBe('y');
+	});
+
+	it('normalizes a stored FAIL EDIT row into the live system-row shape', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#c' }));
+		ircState.networks.push(net);
+
+		setMessages('net1', '#c', [
+			createMessage({ nick: 'alice', text: 'hello', msgid: 'a1', t: 1000 }),
+			createMessage({ nick: 'test.local', command: 'FAIL', text: 'You can only edit your own messages',
+				params: ['EDIT', 'EDIT_FORBIDDEN', '#c', 'a1', 'You can only edit your own messages'], t: 2000 }),
+		]);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#c']);
+		expect(list.length).toBe(2);
+		expect(list[1].nick).toBeUndefined();
+		expect(list[1].text).toBe('Could not edit message: You can only edit your own messages');
 	});
 });
 

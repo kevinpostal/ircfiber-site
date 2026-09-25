@@ -8,7 +8,7 @@
   import { onMount, onDestroy } from 'svelte';
   import {
     ircState, closeMessageActions, toggleReaction, setReplyTarget, setReactTarget,
-    requestEdit, lastSentMessageForBuffer, QUICK_REACTIONS, type MessageActionsTarget,
+    requestEdit, QUICK_REACTIONS, type MessageActionsTarget,
   } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { globalPrefs } from '../stores/preferences.svelte';
@@ -27,17 +27,11 @@
   const net = $derived(ircState.networks.find(n => n.networkId === target.networkId));
   const myNick = $derived(net?.currentNick ?? '');
   const isOwn = $derived(!!target.msg.nick && stripPrefix(target.msg.nick).toLowerCase() === myNick.toLowerCase());
-  const last = $derived(lastSentMessageForBuffer({ networkId: target.networkId, bufferName: target.bufferName }));
-  // The engine's edit path is label-keyed (sendEditMessage(target, label,
-  // body)) and only the last sent message per buffer has a known label,
-  // so Edit exists only on that row. A plain send records just the label
-  // (the echo keeps it on the settled row); msgid/eid are only known after
-  // an edit, so they are the secondary match.
+  // Edits go out as a normal message carrying a `+draft/edit` client tag
+  // naming the row's msgid, so any own row with a msgid is editable
+  // (not just the last sent one). Redacted rows can never be edited.
   const canEdit = $derived(
-    isOwn && !!last
-    && ((!!target.msg.label && last.label === target.msg.label)
-      || (!!last.msgid && last.msgid === target.msg.msgid)
-      || (last.eid !== undefined && last.eid === target.msg.eid))
+    isOwn && !!target.msg.msgid && !target.msg.redacted
     && globalPrefs.featureFlags.editMessage.enabled
     && !!net?.capabilities.has('draft/edit-message'),
   );
@@ -77,10 +71,10 @@
     closeMessageActions();
   }
   function edit(): void {
-    if (!last) return;
+    if (!target.msg.msgid) return;
     requestEdit({
       networkId: target.networkId, bufferName: target.bufferName,
-      eid: last.eid, msgid: last.msgid, label: last.label, body: last.body,
+      msgid: target.msg.msgid, body: target.msg.text ?? '',
     });
     closeMessageActions();
   }

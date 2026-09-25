@@ -479,6 +479,8 @@ export interface IRCMessage {
   /** Label of the original message this event edits in place
    *  (remote draft/edit-message; engine tags it `edit_of`, wire `data.eo`). */
   editOf?: string;
+  /** Set when a draft/edit-message replaced this row's text. */
+  edited?: boolean;
   /** Set when a draft/message-redaction REDACT tombstoned this row. */
   redacted?: boolean;
   /** Redaction reason from `REDACT <target> <msgid> [<reason>]`. */

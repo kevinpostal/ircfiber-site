@@ -174,6 +174,9 @@ string formatEvent(Json ev, FormatCtx c) @trusted {
         if (m.length && m != str(ev, "i")) tags["msgid"] = m;
         const typing = str(ev, "typing");
         if (typing.length) tags["+typing"] = typing;
+        // draft/edit-message: the msgid this PRIVMSG replaces (engine `eo`).
+        const eo = str(ev, "eo");
+        if (eo.length) tags["+draft/edit"] = eo;
     }
     if (c.has("account-tag")) {
         const a = str(ev, "a");

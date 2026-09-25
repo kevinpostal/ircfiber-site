@@ -56,4 +56,7 @@
 .row.messageRow.failed .timestamp::after { content: '✕'; margin-left: 4px; color: #df3d43; font-weight: 600; }
 .row.messageRow.failed .timestamp { cursor: pointer; }
 
+// ── Edited messages (IRCv3 draft/edit-message) ──────────────────────────
+.row.messageRow .content .edited { color: var(--text-muted, #888); font-size: 0.85em; }
+
 

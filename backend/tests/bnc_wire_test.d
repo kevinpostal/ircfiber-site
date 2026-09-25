@@ -160,6 +160,11 @@ private void testFormatEvent() {
     check(formatEvent(redact, ctx("server-time")) == "", "REDACT hidden without the cap");
     check(isBncRedactRow(redact), "REDACT row replays");
     check(!isBncRedactRow(parseJsonString(`{"c":"PRIVMSG"}`)), "PRIVMSG is not a redact row");
+    // draft/edit-message: `eo` rides out as +draft/edit for message-tags clients only.
+    auto edited = parseJsonString(`{"c":"PRIVMSG","n":"bob","hm":"u@h","p":["#c","fixed"],"x":"fixed","ch":"#c","eo":"abc","m":"def","i":"id"}`);
+    auto ed = formatEvent(edited, ctx("message-tags"));
+    check(ed.canFind("+draft/edit=abc") && ed.canFind("msgid=def") && ed.endsWith(":bob!u@h PRIVMSG #c fixed"), "edit tag relayed: " ~ ed);
+    check(formatEvent(edited, ctx()) == ":bob!u@h PRIVMSG #c fixed", "edit tag hidden without message-tags");
 
     // Own labeled message, no echo-message → drop.
     auto own = parseJsonString(`{"c":"PRIVMSG","n":"me","hm":"u@h","se":"true","l":"bnc-deadbeef-1","p":["#c","hi"],"x":"hi","ch":"#c","t":1}`);
