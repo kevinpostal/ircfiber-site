@@ -29,6 +29,7 @@ import { ircState, bufferInputText, lastSentMessages, setTyping, clearTyping, re
 import { globalPrefs, DEFAULT_PREFS } from '../stores/preferences.svelte';
 import { recentHighlightersCache } from '../lib/tabCompletion';
 import { uploadState } from '../stores/uploadStore.svelte';
+import { mediaDock, dockVideo, closeDock } from '../stores/mediaDock.svelte';
 // The reserved-band geometry under test lives here.
 import '../styles/components/_chatInput.scss';
 
@@ -64,6 +65,7 @@ function resetState(): void {
 	bufferInputText.clear();
 	for (const k of Object.keys(lastSentMessages)) delete lastSentMessages[k];
 	Object.assign(globalPrefs, DEFAULT_PREFS);
+	closeDock();
 	recentHighlightersCache.clear();
 }
 
@@ -110,6 +112,46 @@ describe('InputArea compose status row geometry', () => {
 		uploadState.active.length = 0;
 		clearTyping('net1', '#general', 'Alice');
 		flushSync();
+		expect(cell.getBoundingClientRect().height).toBe(idleHeight);
+	});
+
+	it('the minimized mini-player chip joins the row without changing its height', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester', connected: true, lagMs: 41 });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		render(InputArea, { props: { onSendMessage: noSend, onSendRaw: noSend } });
+		flushSync();
+
+		const cell = document.querySelector('.bufferinputcell') as HTMLElement;
+		const row = document.querySelector('.bufferinputcell .composeStatusRow') as HTMLElement;
+		const idleHeight = cell.getBoundingClientRect().height;
+		expect(row.querySelector('.mediaDockChip')).toBeNull();
+
+		dockVideo({ videoId: 'sHuu-kKD0Lc', startSeconds: 83, origin: null });
+		mediaDock.minimized = true;
+		flushSync();
+		const chip = row.querySelector('.mediaDockChip') as HTMLElement;
+		expect(chip).not.toBeNull();
+		expect(chip.getBoundingClientRect().height).toBeLessThanOrEqual(21);
+		expect(chip.textContent).toContain('1:23');
+		expect(Math.round(row.getBoundingClientRect().height)).toBe(25);
+		expect(cell.getBoundingClientRect().height).toBe(idleHeight);
+
+		// Coexists with the typing pill: chip left, pill to its right, same height.
+		setTyping('net1', '#general', 'Alice');
+		flushSync();
+		const pill = row.querySelector('.typing-pill') as HTMLElement;
+		expect(page.getByText('Alice is typing').query()).not.toBeNull();
+		expect(pill.getBoundingClientRect().left).toBeGreaterThanOrEqual(chip.getBoundingClientRect().right);
+		expect(cell.getBoundingClientRect().height).toBe(idleHeight);
+
+		// Chip × closes the player and leaves the row.
+		(chip.querySelector('.mediaDockChip__close') as HTMLButtonElement).click();
+		flushSync();
+		expect(mediaDock.video).toBeNull();
+		expect(row.querySelector('.mediaDockChip')).toBeNull();
 		expect(cell.getBoundingClientRect().height).toBe(idleHeight);
 	});
 });

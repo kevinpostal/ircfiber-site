@@ -5,11 +5,13 @@ import {
   DOCK_MARGIN,
   DOCK_MAX_W,
   DOCK_MIN_W,
+  chipTransform,
   clampDockLayout,
   dockHeightFor,
   maxDockWidthFor,
   parseDockLayout,
   resizeDockWidth,
+  type ChipRect,
   type DockLayout,
   type DockViewport,
 } from './mediaDockLayout';
@@ -214,5 +216,28 @@ describe('parseDockLayout', () => {
     const l: DockLayout = { x: 12, y: 34, w: 300 };
     expect(JSON.stringify(l)).toBe('{"x":12,"y":34,"w":300}');
     expect(parseDockLayout(JSON.stringify(l))).toStrictEqual(l);
+  });
+});
+
+describe('chipTransform', () => {
+  const dock: ChipRect = { left: 100, top: 100, width: 320, height: 204 };
+  const chip: ChipRect = { left: 20, top: 700, width: 120, height: 21 };
+  it('translates by the top-left delta and scales by the size ratio (origin 0 0)', () => {
+    expect(chipTransform(dock, chip)).toBe(
+      `translate(-80px, 600px) scale(${120 / 320}, ${21 / 204})`,
+    );
+    expect(chipTransform(dock, chip)).toBe('translate(-80px, 600px) scale(0.375, 0.10294117647058823)');
+  });
+  it('is its own inverse in direction: swapping the boxes flips the translate and inverts the scale', () => {
+    expect(chipTransform(chip, dock)).toBe(
+      `translate(80px, -600px) scale(${320 / 120}, ${204 / 21})`,
+    );
+  });
+  it('identical boxes map to the identity', () => {
+    expect(chipTransform(dock, { ...dock })).toBe('translate(0px, 0px) scale(1, 1)');
+  });
+  it('a zero-sized `from` (measured while hidden) yields none instead of a division by zero', () => {
+    expect(chipTransform({ ...dock, width: 0 }, chip)).toBe('none');
+    expect(chipTransform({ ...dock, height: 0 }, chip)).toBe('none');
   });
 });

@@ -52,6 +52,11 @@
   justify-content: flex-start;
   pointer-events: none;
 }
+/* Minimized mini-player chip (MediaDockChip.svelte): intrinsic width, sits
+   beside — not inside — the slot so it keeps its pointer events. */
+.bufferinputcell .composeStatusRow .mediaDockChip {
+  flex: 0 0 auto;
+}
 .bufferinputcell .typing-pill {
   box-sizing: border-box;
   min-height: 21px;

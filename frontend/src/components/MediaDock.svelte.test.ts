@@ -1,4 +1,4 @@
-// Drag / resize / remember for the floating YouTube mini player.
+// Drag / resize / remember / minimize for the floating YouTube mini player.
 //
 // Gestures are hand-dispatched PointerEvents (pointerdown on the handle,
 // pointermove/pointerup on window) followed by flushSync, as in
@@ -11,7 +11,14 @@ import { render } from 'vitest-browser-svelte';
 import { page } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import MediaDock from './MediaDock.svelte';
-import { mediaDock, dockVideo, loadDockLayout, setDockLayout } from '../stores/mediaDock.svelte';
+import MediaDockChip from './MediaDockChip.svelte';
+import {
+  mediaDock,
+  closeDock,
+  dockVideo,
+  loadDockLayout,
+  setDockLayout,
+} from '../stores/mediaDock.svelte';
 import { DOCK_LAYOUT_KEY, DOCK_MAX_W, DOCK_MIN_W, DOCK_MARGIN } from '../lib/mediaDockLayout';
 import { restoreViewport, setViewport } from '../test/mobileViewport';
 
@@ -333,5 +340,133 @@ describe('MediaDock drag / resize / remember', () => {
     expect(mediaDock.layout!.w).toBe(320);
     expect(near(root.getBoundingClientRect().width, 320, 0.5)).toBe(true);
     expect(JSON.parse(stored() ?? 'null').w).toBe(320);
+  });
+});
+
+// Minimize shrinks the dock into the taskbar chip (MediaDockChip, normally
+// mounted in InputArea's status row — rendered standalone here) with a WAAPI
+// animation; the `mediaDock--hidden` class lands only when it finishes. The
+// iframe is never unmounted, so playback survives the round trip.
+describe('MediaDock minimize / restore', () => {
+  const settled = async (root: Element): Promise<void> => {
+    await expect.poll(() => root.getAnimations().length, { timeout: 2000 }).toBe(0);
+  };
+  const minimizeBtn = (): HTMLButtonElement =>
+    document.querySelector<HTMLButtonElement>('.mediaDock__minimize')!;
+  const restoreBtn = (): HTMLButtonElement | null =>
+    document.querySelector<HTMLButtonElement>('.mediaDockChip__restore');
+
+  function renderBoth() {
+    const dock = renderDock();
+    render(MediaDockChip);
+    flushSync();
+    return dock;
+  }
+
+  beforeEach(async () => {
+    await setViewport(1280, 800);
+    localStorage.removeItem(DOCK_LAYOUT_KEY);
+    mediaDock.layout = null;
+    dockVideo({ videoId: ID, startSeconds: 0, origin: null });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    closeDock();
+    mediaDock.layout = null;
+    localStorage.removeItem(DOCK_LAYOUT_KEY);
+    await restoreViewport();
+  });
+
+  it('− shrinks the dock into the chip and hides it, iframe intact', async () => {
+    seed(100, 100, 320);
+    const { root, iframe } = renderBoth();
+    expect(restoreBtn()).toBeNull();
+
+    minimizeBtn().click();
+    flushSync();
+    expect(mediaDock.minimized).toBe(true);
+    await expect
+      .element(page.getByRole('button', { name: 'Restore YouTube mini player' }))
+      .toBeInTheDocument();
+    // The chip published its box and the dock is animating towards it.
+    expect(mediaDock.chipRect).not.toBeNull();
+    expect(mediaDock.chipRect!.width).toBeGreaterThan(0);
+    await expect.poll(() => root.getAnimations().length).toBe(1);
+    expect(root.classList.contains('mediaDock--hidden'), 'still painted while shrinking').toBe(false);
+
+    await expect.poll(() => root.classList.contains('mediaDock--hidden'), { timeout: 2000 }).toBe(true);
+    expect(getComputedStyle(root).visibility).toBe('hidden');
+    expect(document.querySelector('.mediaDock__frame')).toBe(iframe);
+  });
+
+  it('clicking the chip restores the dock to its previous spot', async () => {
+    seed(100, 100, 320);
+    const { root } = renderBoth();
+    const before = root.getBoundingClientRect();
+
+    minimizeBtn().click();
+    flushSync();
+    await expect.poll(() => root.classList.contains('mediaDock--hidden'), { timeout: 2000 }).toBe(true);
+
+    restoreBtn()!.click();
+    flushSync();
+    expect(mediaDock.minimized).toBe(false);
+    expect(restoreBtn()).toBeNull();
+    await expect.poll(() => root.classList.contains('mediaDock--hidden')).toBe(false);
+    await settled(root);
+    expect(getComputedStyle(root).visibility).toBe('visible');
+    const after = root.getBoundingClientRect();
+    expect(near(after.left, before.left) && near(after.top, before.top)).toBe(true);
+    expect(near(after.width, before.width) && near(after.height, before.height)).toBe(true);
+  });
+
+  it('chip × closes the player and clears the minimized state', async () => {
+    seed(100, 100, 320);
+    renderBoth();
+    minimizeBtn().click();
+    flushSync();
+    await expect
+      .element(page.getByRole('button', { name: 'Restore YouTube mini player' }))
+      .toBeInTheDocument();
+
+    document.querySelector<HTMLButtonElement>('.mediaDockChip__close')!.click();
+    flushSync();
+    expect(mediaDock.video).toBeNull();
+    expect(mediaDock.minimized).toBe(false);
+    expect(mediaDock.chipRect).toBeNull();
+    expect(document.querySelector('.mediaDock')).toBeNull();
+    expect(document.querySelector('.mediaDockChip')).toBeNull();
+  });
+
+  it('docking a new video while minimized brings the dock back', async () => {
+    seed(100, 100, 320);
+    const { root } = renderBoth();
+    minimizeBtn().click();
+    flushSync();
+    await expect.poll(() => root.classList.contains('mediaDock--hidden'), { timeout: 2000 }).toBe(true);
+
+    dockVideo({ videoId: 'dQw4w9WgXcQ', startSeconds: 0, origin: null });
+    flushSync();
+    expect(mediaDock.minimized).toBe(false);
+    expect(restoreBtn()).toBeNull();
+    await expect.poll(() => root.classList.contains('mediaDock--hidden')).toBe(false);
+  });
+
+  it('prefers-reduced-motion: hides immediately with no animation', async () => {
+    vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList);
+    seed(100, 100, 320);
+    const { root } = renderBoth();
+
+    minimizeBtn().click();
+    flushSync();
+    await expect.poll(() => root.classList.contains('mediaDock--hidden')).toBe(true);
+    expect(root.getAnimations()).toHaveLength(0);
+    expect(document.querySelector('.mediaDockChip')!.getAnimations()).toHaveLength(0);
+
+    restoreBtn()!.click();
+    flushSync();
+    await expect.poll(() => root.classList.contains('mediaDock--hidden')).toBe(false);
+    expect(root.getAnimations()).toHaveLength(0);
   });
 });

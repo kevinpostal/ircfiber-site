@@ -1,6 +1,6 @@
-import { DOCK_LAYOUT_KEY, parseDockLayout, type DockLayout } from '../lib/mediaDockLayout';
+import { DOCK_LAYOUT_KEY, parseDockLayout, type ChipRect, type DockLayout } from '../lib/mediaDockLayout';
 
-export type { DockLayout };
+export type { ChipRect, DockLayout };
 
 export interface DockedVideo {
   videoId: string;
@@ -24,20 +24,41 @@ export function loadDockLayout(): DockLayout | null {
   }
 }
 
-export const mediaDock = $state<{ video: DockedVideo | null; layout: DockLayout | null }>({
+export const mediaDock = $state<{
+  video: DockedVideo | null;
+  layout: DockLayout | null;
+  minimized: boolean;
+  chipRect: ChipRect | null;
+}>({
   video: null,
   // The user's saved spot, unclamped. MediaDock.svelte clamps it against the
   // live viewport when rendering so a shrunken window never overwrites it.
   layout: loadDockLayout(),
+  minimized: false,
+  // Viewport box of the taskbar chip (MediaDockChip.svelte writes it): the
+  // minimize animation's target and the restore animation's source. Plain
+  // object, never a DOMRect. Not persisted.
+  chipRect: null,
 });
 
-/** Replaces any existing docked video (latest wins). */
+/** Replaces any existing docked video (latest wins). A new video is always shown, never minimized. */
 export function dockVideo(v: Omit<DockedVideo, 'positionSeconds'>): void {
   mediaDock.video = { ...v, positionSeconds: v.startSeconds };
+  mediaDock.minimized = false;
 }
 
 export function closeDock(): void {
   mediaDock.video = null;
+  mediaDock.minimized = false;
+  mediaDock.chipRect = null;
+}
+
+export function minimizeDock(): void {
+  if (mediaDock.video) mediaDock.minimized = true;
+}
+
+export function restoreDock(): void {
+  mediaDock.minimized = false;
 }
 
 export function reportDockPosition(seconds: number): void {

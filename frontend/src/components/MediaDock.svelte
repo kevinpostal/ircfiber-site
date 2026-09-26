@@ -1,12 +1,22 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
-  import { mediaDock, closeDock, reportDockPosition, setDockLayout } from '../stores/mediaDock.svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
+  import {
+    mediaDock,
+    closeDock,
+    minimizeDock,
+    reportDockPosition,
+    setDockLayout,
+  } from '../stores/mediaDock.svelte';
   import { youtubeEmbedUrl } from '../lib/youtube';
   import { attachYoutubeBridge } from '../lib/youtubePlayerBridge';
   import {
+    DOCK_ANIM_EASING,
+    DOCK_ANIM_MS,
     DOCK_BAR_H_FALLBACK,
+    chipTransform,
     clampDockLayout,
     resizeDockWidth,
+    type ChipRect,
     type DockLayout,
     type DockViewport,
   } from '../lib/mediaDockLayout';
@@ -161,7 +171,10 @@
     }
   }
 
-  onDestroy(endGesture);
+  onDestroy(() => {
+    endGesture();
+    stopAnim();
+  });
 
   /** Double-click the bar: back to the stylesheet's default corner. */
   function resetLayout(e: MouseEvent): void {
@@ -179,6 +192,100 @@
     const cur = currentLayout();
     setDockLayout({ ...cur, w: resizeDockWidth(cur.w + delta, cur.x, cur.y, viewportNow()) });
   }
+
+  // Visual hide is applied only when the minimize animation ends (and lifted
+  // before the restore one starts) so the box can shrink into the chip while
+  // still painted. visibility, not display: the iframe keeps playing.
+  let hidden = $state(mediaDock.minimized);
+  let anim: Animation | null = null;
+  // Bumped per minimize/restore run; a run that resumes after `tick()` and
+  // finds itself superseded bails out instead of starting a stale animation.
+  let run = 0;
+
+  function reducedMotion(): boolean {
+    return (
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    );
+  }
+
+  function rectOf(el: Element): ChipRect {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, top: r.top, width: r.width, height: r.height };
+  }
+
+  function stopAnim(): void {
+    anim?.cancel();
+    anim = null;
+  }
+
+  async function animateMinimize(): Promise<void> {
+    const me = ++run;
+    stopAnim();
+    await tick(); // chip mounts and writes mediaDock.chipRect
+    if (me !== run) return;
+    const el = rootEl;
+    const to = mediaDock.chipRect;
+    if (!el || !to || reducedMotion() || typeof el.animate !== 'function') {
+      hidden = true;
+      return;
+    }
+    const from = rectOf(el);
+    anim = el.animate(
+      [
+        { transform: 'none', opacity: 1 },
+        { transform: chipTransform(from, to), opacity: 0.2 },
+      ],
+      { duration: DOCK_ANIM_MS, easing: DOCK_ANIM_EASING, fill: 'forwards' },
+    );
+    try {
+      await anim.finished;
+    } catch {
+      return; // cancelled by a restore → leave state to the new run
+    }
+    hidden = true;
+    // The forwards fill must outlive the class flip (no flash of the
+    // full-size dock) but not the restore: a filled animation left on the
+    // element would re-apply the shrunk transform once the restore one ends.
+    await tick();
+    if (me === run) stopAnim();
+  }
+
+  async function animateRestore(): Promise<void> {
+    const me = ++run;
+    stopAnim();
+    // Snapshot taken by the chip right before it flipped `minimized`.
+    const from = mediaDock.chipRect;
+    hidden = false;
+    await tick();
+    if (me !== run) return;
+    const el = rootEl;
+    if (!el || !from || reducedMotion() || typeof el.animate !== 'function') return;
+    const to = rectOf(el);
+    anim = el.animate(
+      [
+        { transform: chipTransform(to, from), opacity: 0.2 },
+        { transform: 'none', opacity: 1 },
+      ],
+      { duration: DOCK_ANIM_MS, easing: DOCK_ANIM_EASING },
+    );
+    try {
+      await anim.finished;
+    } catch {
+      /* cancelled */
+    }
+    anim = null;
+  }
+
+  let prevMinimized = mediaDock.minimized;
+  $effect(() => {
+    const min = mediaDock.minimized;
+    if (min === prevMinimized) return;
+    prevMinimized = min;
+    untrack(() => {
+      void (min ? animateMinimize() : animateRestore());
+    });
+  });
 </script>
 
 {#if mediaDock.video}
@@ -189,6 +296,7 @@
     aria-label="Mini player"
     class:mediaDock--free={!!shown}
     class:mediaDock--dragging={gesturing}
+    class:mediaDock--hidden={hidden}
     style:left={shown ? `${shown.x}px` : null}
     style:top={shown ? `${shown.y}px` : null}
     style:width={shown ? `${shown.w}px` : null}
@@ -209,6 +317,12 @@
           onclick={() => onSwitchBuffer(origin.networkId, origin.bufferName)}
         >Go to channel</button>
       {/if}
+      <button
+        type="button"
+        class="mediaDock__btn mediaDock__minimize"
+        aria-label="Minimize mini player"
+        onclick={minimizeDock}
+      >&#8722;</button>
       <button
         type="button"
         class="mediaDock__btn mediaDock__close"
@@ -257,6 +371,14 @@
     border-radius: 6px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     overflow: hidden;
+    /* Minimize / restore animate a transform that maps this box onto the
+       taskbar chip; no transform is set outside the animation. */
+    transform-origin: 0 0;
+  }
+
+  .mediaDock--hidden {
+    visibility: hidden;
+    pointer-events: none;
   }
   /* Explicit coordinates: drop the stylesheet corner so the box is not
      stretched between `top` and `bottom: 76px`. */
@@ -295,6 +417,7 @@
     font-size: 12px;
     padding: 2px 6px;
   }
+  .mediaDock__minimize,
   .mediaDock__close {
     font-size: 16px;
     line-height: 1;

@@ -11,6 +11,7 @@
   import { pastebinStore, closeFromFile } from '../stores/pastebinStore.svelte';
   import { dataURIToBlob } from '../lib/upload';
   import UploadMenu from './UploadMenu.svelte';
+  import MediaDockChip from './MediaDockChip.svelte';
   // Lazy: PastebinDialog pulls CodeEditor + highlight.js (~hundreds of KB).
   // Loaded on demand via {#await} at the usage site below.
   import { MESSAGE_LENGTH_TRIGGER, ircPayloadBudget } from '../lib/messageSplitter';
@@ -1339,6 +1340,7 @@
 
 <div class="bufferinputcell">
   <div class="composeStatusRow">
+    <MediaDockChip />
     <div class="composeStatusSlot"
          class:is-shown={!!statusLabel}
          class:is-typing={!uploadLabel && !!typingDisplay}

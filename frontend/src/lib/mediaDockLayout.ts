@@ -26,6 +26,10 @@
  * - `DOCK_LAYOUT_KEY` is a raw dot-key: it must bypass the `ircfiber:*`
  *   preference helpers (24h TTL, wiped on sign-out) exactly like
  *   `ircfiber.sidebarCollapsed`.
+ * - `chipTransform(from, to)` is the CSS transform (with `transform-origin: 0 0`)
+ *   that maps viewport box `from` onto viewport box `to`; the minimize / restore
+ *   animation plays it forwards / backwards on the dock root. A zero-sized
+ *   `from` (element measured while hidden) yields `'none'`.
  */
 
 export interface DockLayout {
@@ -44,6 +48,24 @@ export interface DockViewport {
   vh: number;
   /** Rendered height of the dock's title bar (px). */
   barH: number;
+}
+
+/** A viewport box in CSS pixels (a plain object, never a `DOMRect`). */
+export interface ChipRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** Duration of the minimize / restore animation (ms). */
+export const DOCK_ANIM_MS = 280;
+export const DOCK_ANIM_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
+
+/** CSS transform (origin 0 0) that maps box `from` onto box `to`. */
+export function chipTransform(from: ChipRect, to: ChipRect): string {
+  if (from.width === 0 || from.height === 0) return 'none';
+  return `translate(${to.left - from.left}px, ${to.top - from.top}px) scale(${to.width / from.width}, ${to.height / from.height})`;
 }
 
 /** localStorage key (raw dot-key, see module doc). */
