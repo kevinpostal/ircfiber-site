@@ -164,6 +164,8 @@ vault_ircd_webirc_password: "REPLACE-WITH-STRONG-PASSWORD"
 # Z-line. Those values are for a local test rig only.
 vault_turnstile_site_key: "REPLACE-WITH-TURNSTILE-SITE-KEY"
 vault_turnstile_secret: "REPLACE-WITH-TURNSTILE-SECRET"
+# KLIPY partner app key (partner.klipy.com → API Keys): inline klipy.com GIF embeds.
+vault_klipy_app_key: "REPLACE-WITH-KLIPY-APP-KEY"
 
 # --- SigNoz query API (admin Logs page) --------------------------------------
 # Service-account API key for the k8s SigNoz (mint in SigNoz UI →

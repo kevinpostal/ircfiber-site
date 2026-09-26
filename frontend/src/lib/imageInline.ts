@@ -155,6 +155,8 @@ export function extractImageUrlsFromText(text: string): string[] {
   return out;
 }
 export function proxiedImageUrl(rawUrl: string): string {
+  // Inline data/blob sources have nothing to proxy (and no origin to hide).
+  if (/^(?:data|blob):/i.test(rawUrl)) return rawUrl;
   try {
     const u = new URL(rawUrl, typeof location !== 'undefined' ? location.origin : 'http://localhost');
     if (u.pathname.startsWith('/uploads/')) return u.pathname + u.search + u.hash;

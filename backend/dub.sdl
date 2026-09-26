@@ -66,6 +66,18 @@ configuration "bnc-wire-test" {
     versions "VibeUseFibers"
 }
 
+// Klipy Items API → inline embed projection (no network):
+//   dub --root=backend build --config=klipy-test && ./backend/klipy-test
+configuration "klipy-test" {
+    targetType "executable"
+    targetName "klipy-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/api/klipy.d" "source/ircfiber/env.d"
+    mainSourceFile "tests/klipy_test.d"
+    versions "VibeUseFibers"
+}
+
 // Pure-code unit test for the IRCd admin parsing/redaction helpers
 // (no Redis/Mongo/IRCd needed):
 //   dub --root=backend build --config=ircd-test && ./backend/ircd-test

@@ -37,6 +37,7 @@ import std.path : buildPath;
 import std.string : strip, indexOf, lastIndexOf, toLower;
 import ircfiber.auth : requireAuth;
 import ircfiber.api.image_proxy : handleImageProxy;
+import ircfiber.api.klipy : handleKlipyEmbed;
 import ircfiber.api.gifspool : gifSpoolSafeName, gifSpoolSpec, gifSpoolValue,
     parseGifProgress, parseGifExit, gifExitMessage, GifExitRecord;
 import ircfiber.build_info : buildInfo;
@@ -93,6 +94,7 @@ final class RESTAPI {
     /// Registers REST routes on the given router.
     void registerRoutes(URLRouter router) {
         router.get("/api/image-proxy", &handleImageProxy);
+        router.get("/api/embed/klipy", &handleKlipyEmbed);
         router.get("/api/networks", &getNetworks);
         router.post("/api/networks", &createNetwork);
         router.post("/api/networks/default-fiber", &createDefaultFiberNetwork);

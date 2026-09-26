@@ -111,3 +111,10 @@ describe('proxiedImageUrl', () => {
     expect(proxiedImageUrl('/uploads/x.jpg?foo=1#bar')).toBe('/uploads/x.jpg?foo=1#bar');
   });
 });
+
+describe('proxiedImageUrl data/blob passthrough', () => {
+  it('leaves inline sources alone', () => {
+    expect(proxiedImageUrl('data:image/png;base64,AAAA')).toBe('data:image/png;base64,AAAA');
+    expect(proxiedImageUrl('blob:https://ircfiber.com/1234')).toBe('blob:https://ircfiber.com/1234');
+  });
+});

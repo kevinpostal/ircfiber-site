@@ -14,8 +14,10 @@
   import LongMessageContent from './LongMessageContent.svelte';
   import YoutubeEmbed from './YoutubeEmbed.svelte';
   import ImageInline from './ImageInline.svelte';
+  import KlipyInline from './KlipyInline.svelte';
   import TextInline from './TextInline.svelte';
   import { extractImageUrlsFromText } from '../lib/imageInline';
+  import { extractKlipySlugsFromText } from '../lib/klipyInline';
   import { extractTextUrlsFromText } from '../lib/textInline';
   import { extractYoutubeIdsFromText } from '../lib/youtube';
   import { isEmojiOnly } from '../lib/emoji';
@@ -500,6 +502,21 @@
     if (!text) return [];
     return extractImageUrlsFromText(text);
   });
+  // Inline KLIPY GIFs (klipy.com/gifs/<slug>) — same gates as images; the
+  // media itself is resolved by the gateway (see lib/klipyInline.ts).
+  const klipySlugs = $derived.by(() => {
+    if (!globalPrefs.inlineImages) return [];
+    const net = getActiveNetwork();
+    const buf = getActiveBufferObj();
+    if (buf && net?.networkId) {
+      const bp = getBufferPrefs(net.networkId, buf.name);
+      if (bp.inlineImages === false) return [];
+    }
+    if (!isChat) return [];
+    const text = chatContent?.text ?? msg.text ?? '';
+    if (!text) return [];
+    return extractKlipySlugsFromText(text);
+  });
   // Inline text/code previews — hosted text files (like images) with svelte-highlight.
   const textUrls = $derived.by(() => {
     const text = chatContent?.text ?? msg.text ?? '';
@@ -844,14 +861,14 @@
             <span role="presentation">{initial}</span>
           </span><span class="me_prefix">&mdash;</span>&nbsp;{#if modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events
           --><span role="button" tabindex="0" class="buffer bufferLink author {colorCls} {modeInfo ? 'moded ' + modeInfo.cls : ''} user hasUserParent link"
-                title={authorTitle} onclick={handleNickClick}>{@html parseIrcFormatting(nick)}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}
+                title={authorTitle} onclick={handleNickClick}>{@html parseIrcFormatting(nick)}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || klipySlugs.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each klipySlugs as ks (ks)}<KlipyInline slug={ks} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}
         </span>
       {:else if chatContent}
-        <span translate="no" class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} />{#if msg.edited && !isSystem}<span class="edited" title="edited"> (edited)</span>{/if}{#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}</span>
+        <span translate="no" class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} />{#if msg.edited && !isSystem}<span class="edited" title="edited"> (edited)</span>{/if}{#if youtubeIds.length > 0 || imageUrls.length > 0 || klipySlugs.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each klipySlugs as ks (ks)}<KlipyInline slug={ks} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}</span>
       {:else}
         {@html getContentHTML()}
-        {#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}
-          <span class="inlineEmbeds inlineEmbeds--outside">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>
+        {#if youtubeIds.length > 0 || imageUrls.length > 0 || klipySlugs.length > 0 || textUrls.length > 0}
+          <span class="inlineEmbeds inlineEmbeds--outside">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each klipySlugs as ks (ks)}<KlipyInline slug={ks} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>
         {/if}
       {/if}
     </span>
