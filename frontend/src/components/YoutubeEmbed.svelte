@@ -42,22 +42,36 @@
     });
   });
 
+  /** Hand this row's video to the mini player from its last reported position. */
+  function dockHere(): void {
+    dockVideo({
+      videoId: id,
+      startSeconds: Math.floor(lastInfo.currentTime ?? 0),
+      origin: originBuffer,
+    });
+  }
+
   // Unmount (channel switch or windowing trim) while playing → keep the
   // video alive in the mini player from its last reported position.
   onDestroy(() => {
     if (closed || docked) return;
     const st = lastInfo.playerState;
     if (st !== YT_STATE_PLAYING && st !== YT_STATE_BUFFERING) return;
-    dockVideo({
-      videoId: id,
-      startSeconds: Math.floor(lastInfo.currentTime ?? 0),
-      origin: originBuffer,
-    });
+    dockHere();
   });
 
   function onClose(e: MouseEvent): void {
     e.preventDefault();
     closed = true;
+  }
+
+  // Explicit pop-out works for paused / never-started videos too (start 0
+  // when nothing has been reported yet). The dock URL carries autoplay=1,
+  // so a paused video resumes there; intended. stopPropagation keeps the
+  // MessageRow click/selection handlers out of it, like the reaction buttons.
+  function popOut(e: MouseEvent): void {
+    e.stopPropagation();
+    dockHere();
   }
 
   function returnHere(): void {
@@ -105,6 +119,13 @@
         role="button"
         aria-label="Close video"
       ></a>
+      <button
+        type="button"
+        class="embedPopout"
+        title="Play in mini player"
+        aria-label="Pop out video"
+        onclick={popOut}
+      >Pop out</button>
     {/if}
   </span>
 {/if}
@@ -154,6 +175,42 @@
   :global(.embedClose:hover),
   :global(.embedClose:focus) {
     background-position: 0 -25px;
+  }
+  /* Pop-out pill over the player's top-left corner. Absolutely positioned
+     so the wrapper's height never changes (MessageList observes it), and
+     hover-revealed via opacity — never visibility/off-screen — so the
+     button keeps a real box and stays clickable and focusable. */
+  .embedPopout {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 3;
+    margin: 0;
+    padding: 3px 8px;
+    border: 0;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    opacity: 0;
+  }
+  :global(.directEmbedWrap:hover) .embedPopout,
+  .embedPopout:focus-visible {
+    opacity: 1;
+  }
+  .embedPopout:focus-visible {
+    outline: 1px solid #4a6fa5;
+    outline-offset: 1px;
+  }
+  @media (hover: none) {
+    .embedPopout {
+      opacity: 1;
+    }
   }
   :global(.youtubeDocked) {
     display: flex;

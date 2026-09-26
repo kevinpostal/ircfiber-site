@@ -4,6 +4,7 @@ import { page } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import YoutubeEmbed from './YoutubeEmbed.svelte';
 import { mediaDock, dockVideo, reportDockPosition } from '../stores/mediaDock.svelte';
+import { ircState } from '../stores/ircStore.svelte';
 
 const ID = 'sHuu-kKD0Lc';
 
@@ -57,5 +58,37 @@ describe('YoutubeEmbed mini-player handoff', () => {
     const src = document.querySelector('iframe')?.src ?? '';
     expect(src).toContain('start=33');
     expect(src).toContain('autoplay=1');
+  });
+
+  it('Pop out docks at floored currentTime even when paused', async () => {
+    const { iframe, unmount } = renderEmbed();
+    fakeInfo(iframe, { currentTime: 12.6, playerState: 2 });
+    await page.getByRole('button', { name: 'Pop out video' }).click();
+    flushSync();
+    expect(mediaDock.video).toEqual({ videoId: ID, startSeconds: 12, positionSeconds: 12, origin: null });
+    await expect.element(page.getByRole('button', { name: 'Bring back here' })).toBeInTheDocument();
+    expect(document.querySelector('iframe')).toBeNull();
+    // Unmounting a row that is already docked must not dock it again. A
+    // re-dock would reset positionSeconds back to startSeconds, so bump it
+    // first and check it survives.
+    reportDockPosition(20);
+    unmount();
+    expect(mediaDock.video).toEqual({ videoId: ID, startSeconds: 12, positionSeconds: 20, origin: null });
+  });
+
+  it('Pop out with no info yet docks at 0', async () => {
+    renderEmbed();
+    await page.getByRole('button', { name: 'Pop out video' }).click();
+    flushSync();
+    expect(mediaDock.video).toEqual({ videoId: ID, startSeconds: 0, positionSeconds: 0, origin: null });
+  });
+
+  it('Pop out records the buffer it came from', async () => {
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '#chan';
+    renderEmbed();
+    await page.getByRole('button', { name: 'Pop out video' }).click();
+    flushSync();
+    expect(mediaDock.video?.origin).toEqual({ networkId: 'net1', bufferName: '#chan' });
   });
 });
