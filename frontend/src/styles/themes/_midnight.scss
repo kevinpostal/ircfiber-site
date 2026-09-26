@@ -90,15 +90,20 @@
 /* One box for both: the confirm dialog (#fileUploadContainer) and the
    upload/GIF progress dialog (#uploadProgressContainer) that replaces it on
    submit. The rule is id-scoped, so a new dialog carrying only
-   .uploadDialog renders as unstyled text in the page's top-left corner. */
+   .uploadDialog renders as unstyled text in the page's top-left corner.
+   Width is capped by the viewport: a fixed 550px box centred with a
+   negative margin started 80px off the left edge on phones, where
+   `overflow-x: hidden` clipped everything but a sliver of the Upload
+   button — iPhone users could pick a photo but never confirm it. */
 #fileUploadContainer.uploadDialog,
 #uploadProgressContainer.uploadDialog {
   position: absolute;
   top: 50px;
   left: 50%;
-  margin-left: -275px;
-  width: 550px;
+  transform: translateX(-50%);
+  width: min(550px, calc(100% - 16px));
   max-height: 80%;
+  overflow-y: auto;
   padding: 24px 28px;
   background-color: #1a1d21;
   border: 1px solid #2c2f35;
@@ -110,6 +115,15 @@
   z-index: 2;
   box-sizing: border-box;
   border-radius: 8px;
+}
+
+@media (max-width: 800px) {
+  #fileUploadContainer.uploadDialog,
+  #uploadProgressContainer.uploadDialog {
+    top: 12px;
+    padding: 16px;
+  }
+  .uploadDialog .buttons { flex-wrap: wrap; }
 }
 
 .uploadDialog .heading {
