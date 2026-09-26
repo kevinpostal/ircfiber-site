@@ -202,6 +202,29 @@ describe('MessageRow', () => {
 		expect(document.querySelector('.messageRow.blockArt')).not.toBeInTheDocument();
 	});
 
+	it('sizes the content-visibility placeholder of art rows by line count', async () => {
+		// Skipped off-screen art rows are laid out at this placeholder height;
+		// a mismatch shifts content as rows scroll into view (Safari has no
+		// scroll anchoring to hide it). One 16px line for a grouped art line,
+		// plus the author header on the first row of a run, N lines for
+		// multi-line art; plain chat rows are never skipped and carry none.
+		render(MessageRow, { props: { msg: createMessage({ nick: 'Carlos', text: '\x0304,08 ███▀▀▄ ' }), isSameAuthor: true } });
+		expect((document.querySelector('.messageRow') as HTMLElement).style.containIntrinsicSize).toBe('auto 16px');
+		document.body.innerHTML = '';
+
+		render(MessageRow, { props: { msg: createMessage({ nick: 'Carlos', text: '\x0304,08 ███▀▀▄ ' }), isSameAuthor: false } });
+		expect((document.querySelector('.messageRow') as HTMLElement).style.containIntrinsicSize).toBe('auto 42px');
+		document.body.innerHTML = '';
+
+		const art = ['┌───────┐  ┌───────┐', '│  IRC  │  │ FIBER │', '└───────┘  └───────┘'].join('\n');
+		render(MessageRow, { props: { msg: createMessage({ nick: 'carol', text: art }), isSameAuthor: true } });
+		expect((document.querySelector('.messageRow') as HTMLElement).style.containIntrinsicSize).toBe('auto 48px');
+		document.body.innerHTML = '';
+
+		render(MessageRow, { props: { msg: createMessage({ nick: 'dave', text: 'hello everyone' }) } });
+		expect((document.querySelector('.messageRow') as HTMLElement).style.containIntrinsicSize).toBe('');
+	});
+
 	it('calls onNickClick when nick is clicked', async () => {
 		const onNickClick = vi.fn();
 		const msg = createMessage({ nick: 'alice', text: 'hello' });

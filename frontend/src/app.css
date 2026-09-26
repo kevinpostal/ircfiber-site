@@ -134,19 +134,24 @@ body.ascii-compact .row.messageRow {
   padding: 0 var(--row-gutter-right) 0 var(--row-gutter-left);
 }
 /* ANSI-art rows (blockArt / bot) can be 20-100 lines × 10 spans/line.
-   content-visibility skips off-screen art during scroll, intrinsic-size
-   avoids scrollbar jitter. Plain text rows (type_buffer_msg) must NOT
-   skip rendering: a skipped row reports the 300px intrinsic fallback
-   instead of its real height, inflating scrollHeight by thousands of
-   phantom pixels. The history-loading scroll math measures prepend
-   deltas from scrollHeight (revealBacklogFromMemory oldTop+delta, the
-   backlog-divider anchor), so phantom rows make it over-compensate and
+   content-visibility skips off-screen art during scroll. The placeholder
+   height MUST track the real row height: the browser substitutes it for
+   every skipped row, so a wrong value inflates scrollHeight and shifts
+   content as rows snap to their real size on entering the viewport. Chrome
+   hides that with scroll anchoring; Safari has none, so a 300px placeholder
+   on 16px art lines left wheel scrolling almost stationary through an art
+   dump. MessageRow sets the per-row value inline (`auto <lines×16px>`; the
+   `auto` keyword keeps the last rendered size); this 16px is only the
+   fallback for a row without one. Plain text rows (type_buffer_msg) must
+   NOT skip rendering at all: the history-loading scroll math measures
+   prepend deltas from scrollHeight (revealBacklogFromMemory oldTop+delta,
+   the backlog-divider anchor), so phantom rows make it over-compensate and
    yank the viewport to the bottom every time the user scrolls up to load
    chat history. */
 .row.messageRow.bot,
 .row.messageRow.blockArt {
   content-visibility: auto;
-  contain-intrinsic-size: 1px 300px;
+  contain-intrinsic-size: auto 16px;
 }
 /* Exception to both rules above, for the row-actions toolbar
    (styles/components/_replies.scss): the pill is 26px tall (20px buttons +

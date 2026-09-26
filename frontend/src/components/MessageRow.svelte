@@ -2,7 +2,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import type { IRCMessage, Member } from '../types';
-  import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, plainNick, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel, isTouchDevice } from '../lib/utils';
+  import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, plainNick, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel, isTouchDevice, countLines } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml, wrapNicksWithHighlight, buildNickMentionPattern } from '../lib/autolinker';
   import { modeSentences } from '../lib/modeSentence';
@@ -91,6 +91,18 @@
   const isOwn = $derived(!!nick && !!myNick && stripPrefix(nick).toLowerCase() === myNick.toLowerCase());
   const isBot = $derived(isBotNick(nick, findMemberForNick(nick), msg.prefix));
   const isBlockArt = $derived(memoBlockArt(containsBlockArt, msg.text || ''));
+  /// Placeholder height for `content-visibility: auto` rows (app.css
+  /// `.bot`/`.blockArt`). The browser substitutes this for a skipped
+  /// off-screen row, so it must match the real height: art rows are
+  /// 16px per line and a header line on the first row of a run. A fixed
+  /// 300px placeholder made every off-screen art line ~19× too tall;
+  /// Safari has no scroll anchoring, so each row snapping 300→16px as it
+  /// scrolled into view cancelled the wheel delta and the viewport never
+  /// moved through an art dump. `auto` keeps the last rendered size once
+  /// the row has been laid out; the estimate only covers never-rendered rows.
+  const intrinsicSize = $derived(
+    isBlockArt || isBot ? `auto ${countLines(msg.text || '') * 16 + (isSameAuthor ? 0 : 26)}px` : undefined,
+  );
 
   // Mentions are typed as plain text, so the pattern and the highlight set
   // hold the formatting-free spelling of every roster nick and of our own;
@@ -778,6 +790,7 @@
   <div
     class="row messageRow {isJoinPart ? 'joinPart' : ''} {isPlainStatus ? 'status' : ''} {isMonoStatus ? 'status monospace' : ''} {isNoticeRow ? 'notice' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {isEmojiOnlyRow ? 'onlyEmoji' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''} {isEntrance ? 'messageEntrance' : ''} {tsHover ? 'timestampHighlight' : ''} {pendingState ?? ''}"
     data-time={msg.t}
+    style:contain-intrinsic-size={intrinsicSize}
     data-name={nick || undefined}
     data-usermask={usermaskAttr || undefined}
     data-msgid={msg.msgid || undefined}
