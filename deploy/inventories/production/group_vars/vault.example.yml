@@ -57,6 +57,9 @@ vault_ircd_netcrave_link_password: "REPLACE-WITH-NETCRAVE-LINK-SECRET"
 # Server-link password for the k3s spanningtree leaf (k8s.ircfiber.com).
 # Shared sendpass/recvpass on both sides of the OVH<->k3s link.
 vault_ircd_k8s_link_password: "REPLACE-WITH-K8S-LINK-SECRET"
+# Server-link password for the ircd.chat fallback link (custom.conf; manual
+# CONNECT only — ircd.chat normally sits behind irc.netcrave.chat).
+vault_ircd_ircdchat_link_password: "REPLACE-WITH-IRCDCHAT-LINK-SECRET"
 
 # --- Merged services (Anope 2.1 + BridgeServ, one instance) --------------------
 # Discord bot token of the BRIDGESERV application. Rendered into the

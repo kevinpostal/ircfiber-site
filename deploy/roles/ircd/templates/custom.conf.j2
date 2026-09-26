@@ -26,6 +26,27 @@
 
 <autoconnect period="16s"
              server="irc.netcrave.chat">
+
+#-#-#-#-#-#-#-#-#-#-#-#-#  FALLBACK LINK (ircd.chat)  -#-#-#-#-#-#-#-#-#-#
+#
+# ircd.chat normally reaches us THROUGH irc.netcrave.chat (it is introduced
+# in netcrave's burst), so this link is declared for a manual /CONNECT when
+# netcrave itself is down — spanningtree refuses a second path to a server
+# that is already in the tree. Deliberately no <autoconnect>: two dialers
+# racing for the same peer produce link collisions, and netcrave's
+# autoconnect above already restores the whole far side. Coordinates and
+# password from paige's 2026-09-26 config (same secret both directions).
+<link allowmask="*"
+      bind="*"
+      ipaddr="2001:41d0:800:1bbc::1"
+      port="4445"
+      hidden="no"
+      name="ircd.chat"
+      recvpass="{{ vault_ircd_ircdchat_link_password }}"
+      sendpass="{{ vault_ircd_ircdchat_link_password }}"
+      statshidden="no"
+      sslprofile="main"
+      timeout="8s">
 {% if ircd_k8s_link_enabled %}
 
 #-#-#-#-#-#-#-#-#-#-#  k3s LEAF LINK ({{ ircd_k8s_leaf_name }})  -#-#-#-#-#-#-#

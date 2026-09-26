@@ -20,6 +20,9 @@
       - vault_ircd_k8s_link_password is defined
       - vault_ircd_k8s_link_password | length >= 16
       - vault_ircd_k8s_link_password != "REPLACE-WITH-K8S-LINK-SECRET"
+      - vault_ircd_ircdchat_link_password is defined
+      - vault_ircd_ircdchat_link_password | length >= 16
+      - vault_ircd_ircdchat_link_password != "REPLACE-WITH-IRCDCHAT-LINK-SECRET"
       - vault_ircd_cloak_key is defined
       - vault_ircd_cloak_key | length >= 30
       - vault_ircd_dashboard_password is defined
@@ -38,6 +41,8 @@
       vault_ircd_netcrave_link_password (>=16 chars, not the placeholder),
       vault_ircd_k8s_link_password (>=16 chars, not the placeholder; the
       OVH hub <-> k3s leaf spanningtree link),
+      vault_ircd_ircdchat_link_password (>=16 chars, not the placeholder;
+      the manual-CONNECT fallback link to ircd.chat),
       vault_ircd_fibereye_oper_password (FiberEye connection-watch and
       #staff announcer oper, used by the ircfiber-fibereye container),
       vault_ircd_services_rpc_token (>=32 chars; Bearer for the merged

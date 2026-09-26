@@ -514,6 +514,39 @@
 <module name="showwhois">
 <showwhois opersonly="no" showfromopers="yes">
 
+# EXTBAN / OPTCOMMON PARITY (2026-09-26) — clears the two warnings the
+# netcrave link logged on every burst ("Optional modules do not match" and
+# "ExtBan lists do not match"): allowmismatch lets the link come up, but a
+# ban set on one server with an extban the other side lacks is silently
+# ignored there. This is the exact CAPAB MODSUPPORT / EXTBANS delta against
+# irc.netcrave.chat (probe: CAPAB START 1206 to each :4445), and nothing
+# more of paige's proposed config: no listener, sslprofile, oper, SASL or
+# policy changes. All VF_OPTCOMMON; none registers a chan/user mode, so
+# the strictly-compared CHANMODES/USERMODES lists are untouched.
+
+# Extbans (matching:… / acting:…)
+<module name="channelban">    # j: match users in another channel
+<module name="classban">      # n: match connect class
+<module name="geoban">        # G: match country (inert without a geolocation provider)
+<module name="muteban">       # m: acting mute
+<muteban notifyuser="yes">
+<module name="realnameban">   # r: realname, a: realmask nick!user@host+realname
+<module name="serverban">     # s: match server name
+<module name="sharebans">     # b: share another channel's ban list
+
+# Link-compared with no extban/mode of their own
+<module name="customtitle">   # TITLE command; no <title> tags defined here, so inert
+<module name="nicklock">      # NICKLOCK/NICKUNLOCK (BanControl class already lists them)
+<module name="opermotd">
+# Read lazily on /OPERMOTD only; the shared MOTD doubles as it. onoper off
+# so opering up does not replay the MOTD.
+<opermotd file="/inspircd/conf/motd.d/motd" onoper="no">
+<module name="uninvite">
+
+# chghost hostchars= is part of MODSUPPORT link data and comes from this
+# charmap. Netcrave's includes "," — mirrored so the token matches.
+<hostname charmap="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-_/0123456789,">
+
 #-#-#-#-#-#-#-#-#-  ADD-NOW (2026-09-08)  -#-#-#-#-#-#-#-#
 # Approved 2026-09-08. All link-safe: no new chan/user modes, no
 # link-data change (CHANMODES/USERMODES CAPAB diff stays empty).
