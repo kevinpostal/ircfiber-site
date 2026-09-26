@@ -26,6 +26,12 @@
 # threshold still made it chase 12% of 1.87T (~224G) and evict every
 # evictable pod on the node. The drop-in overrides that too.
 #
+# 2% was still a percentage of that disk (2026-09-26): ~37G, and the host
+# hovers at 33–43G free, so every image build or log burst tripped it and
+# evicted the irc3 bot (52Ki of ephemeral storage) five times in one
+# afternoon. Absolute thresholds now: 5Gi is more headroom than the cluster
+# needs to keep writing, and it only trips when the host is genuinely full.
+#
 # k3s on this node is not under systemd — /usr/local/bin/start.sh launches it
 # with `nohup k3s server > /var/log/k3s.log 2>&1 &` — so the restart handler
 # reproduces exactly that, then waits for the API to answer.
@@ -51,16 +57,18 @@
           snapshotter: fuse-overlayfs
           secrets-encryption: true
           # Eviction tuning. The node's root filesystem is odysseus' 1.87T
-          # disk, which we do not control and which sits at ~97%.
+          # disk, which we do not control and which sits at ~98%.
           #
-          # - eviction-hard 2%: ~37G reserve, more than the entire cluster's
-          #   own footprint, where k3s' default 5% (93G) is unreachable.
+          # - eviction-hard 5Gi absolute: a percentage of that disk is a
+          #   moving target we cannot meet (k3s' default 5% = 93G; even 2%
+          #   = 37G tripped daily at 33–43G free and evicted the irc3 bot).
+          #   5Gi is more than the cluster's own write headroom.
           # - eviction-minimum-reclaim: how much MORE kubelet must free after
           #   a threshold trips before it stops evicting. k3s defaults it to
           #   10% of nodefs AND imagefs, so the eviction manager chased
-          #   2% + 10% = ~224G and evicted every evictable pod on the node in
-          #   a loop at 66G / 3.8% free (2026-09-13). 1Gi means "get back
-          #   over the line, then stop".
+          #   ~224G and evicted every evictable pod on the node in a loop
+          #   at 66G free (2026-09-13). 1Gi means "get back over the line,
+          #   then stop".
           # - nodefs.inodesFree is carried explicitly: eviction-hard replaces
           #   the whole map and an inode guard is worth keeping.
           #
@@ -69,7 +77,7 @@
           # earlier 10-ircfiber-eviction.conf drop-in never took effect
           # (configz kept reporting the flag's 3% and k3s' 10% reclaim).
           kubelet-arg:
-            - "eviction-hard=nodefs.available<2%,imagefs.available<2%,nodefs.inodesFree<3%"
+            - "eviction-hard=nodefs.available<5Gi,imagefs.available<5Gi,nodefs.inodesFree<3%"
             - "eviction-minimum-reclaim=nodefs.available=1Gi,imagefs.available=1Gi"
       notify: Restart k3s
 
@@ -112,8 +120,8 @@
     - name: Assert kubelet runs with the tuned eviction values
       ansible.builtin.assert:
         that:
-          - (k3s_configz.stdout | from_json).hard['nodefs.available'] == '2%'
-          - (k3s_configz.stdout | from_json).hard['imagefs.available'] == '2%'
+          - (k3s_configz.stdout | from_json).hard['nodefs.available'] == '5Gi'
+          - (k3s_configz.stdout | from_json).hard['imagefs.available'] == '5Gi'
           - (k3s_configz.stdout | from_json).minReclaim['nodefs.available'] == '1Gi'
           - (k3s_configz.stdout | from_json).minReclaim['imagefs.available'] == '1Gi'
         success_msg: "kubelet eviction: {{ k3s_configz.stdout }}"
