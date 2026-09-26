@@ -7,11 +7,17 @@
  * (`api/v1/{app_key}/gifs/items?slugs=`), which needs the partner app key
  * (`IRCFIBER_KLIPY_APP_KEY` / `_FILE`, partner.klipy.com → API Keys).
  *
- * Without a key the endpoint answers 503 and the frontend leaves the link
- * as plain text. With one it returns the `md` rendition (animated WebP,
- * GIF, MP4, poster JPG, dimensions, title); the frontend loads the image
- * through /api/image-proxy like every other external inline, so the key
- * and the client IP never reach KLIPY from the browser.
+ * With a key it returns the `md` rendition (animated WebP, GIF, MP4,
+ * poster JPG, dimensions, title); the frontend loads the image through
+ * /api/image-proxy like every other external inline, so the key and the
+ * client IP never reach KLIPY from the browser.
+ *
+ * Without a key it falls back to the page's Open Graph tags. KLIPY serves
+ * those only to allowlisted chat unfurlers (Discordbot, WhatsApp — our own
+ * UA and generic browser UAs get the challenge), so the fallback presents
+ * as Discordbot. That is a borrowed allowlist entry, not a contract: if
+ * KLIPY tightens it the fallback returns 502 and links go back to plain
+ * text. Set the key to be on the supported path.
  *
  * Results are cached per slug for an hour (testing-mode keys are limited
  * to 100 requests/hour). Misses (unknown slug) are cached too, briefly, so
@@ -144,6 +150,85 @@ private Json resolve(string appKey, string slug) {
     return embedFromItem((*items)[0], slug);
 }
 
+/// The unfurler UA KLIPY allowlists (generic/browser UAs get the challenge).
+private enum UNFURL_UA = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)";
+
+private enum OG_META_RE = ctRegex!(`<meta\s+(?:property|name)="(og:[a-z:_]+)"\s+content="([^"]*)"`, "g");
+
+/// Builds the embed from the share page's Open Graph tags. Public for
+/// tests/klipy_test.d. Returns null when the page carries no usable media.
+Json embedFromOpenGraph(string html, string slug) @safe {
+    import std.regex : matchAll;
+    import std.string : replace;
+    Json webp = Json(null), gif = Json(null), mp4 = Json(null);
+    string title;
+    // og:image repeats (webp, then gif); each is followed by its own
+    // width/height/type, so track the most recent image/video.
+    string curUrl; long curW, curH; string curKind;
+    void flush() @safe {
+        if (!curUrl.length) return;
+        auto r = Json(["url": Json(curUrl), "width": Json(curW), "height": Json(curH)]);
+        bool okHost;
+        try { auto u = URL(curUrl); okHost = u.schema == "https" && (u.host == "klipy.com" || u.host.endsWith(".klipy.com")); }
+        catch (Exception) {}
+        if (okHost) {
+            if (curKind == "image/webp" || (curKind == "" && curUrl.endsWith(".webp"))) webp = r;
+            else if (curKind == "image/gif" || (curKind == "" && curUrl.endsWith(".gif"))) gif = r;
+            else if (curKind == "video/mp4" || (curKind == "" && curUrl.endsWith(".mp4"))) mp4 = r;
+        }
+        curUrl = null; curW = 0; curH = 0; curKind = null;
+    }
+    foreach (m; matchAll(html, OG_META_RE)) {
+        const key = m[1];
+        const val = m[2].replace("&amp;", "&");
+        switch (key) {
+            case "og:title":
+                // "KLIPY: <name> GIF – View & Share" (the dash is &#8211; or the
+                // literal en dash, and & has already been unescaped above).
+                title = val.replace("KLIPY: ", "").replace(" &#8211; View & Share", "").replace(" – View & Share", "");
+                break;
+            case "og:image": case "og:video:url": flush(); curUrl = val; break;
+            case "og:video:secure_url": if (!curUrl.length) curUrl = val; break;
+            case "og:image:width": case "og:video:width": try curW = val.to!long; catch (Exception) {} break;
+            case "og:image:height": case "og:video:height": try curH = val.to!long; catch (Exception) {} break;
+            case "og:image:type": case "og:video:type": curKind = val; break;
+            default: break;
+        }
+    }
+    flush();
+    if (webp.type == Json.Type.null_ && gif.type == Json.Type.null_) return Json(null);
+    return Json([
+        "slug": Json(slug), "title": Json(title), "page": Json("https://klipy.com/gifs/" ~ slug),
+        "webp": webp, "gif": gif, "mp4": mp4, "poster": Json(null),
+    ]);
+}
+
+/// Fetches the share page as an unfurler and projects its Open Graph tags.
+/// Null for a page without media (unknown slug renders a generic page);
+/// throws on transport failure or the challenge page (403).
+private Json resolveViaOpenGraph(string slug) {
+    auto settings = new HTTPClientSettings;
+    settings.connectTimeout = 5.seconds;
+    settings.readTimeout = 8.seconds;
+    int status;
+    string body_;
+    requestHTTP("https://klipy.com/gifs/" ~ slug,
+        (scope HTTPClientRequest req) {
+            req.method = HTTPMethod.GET;
+            req.headers["User-Agent"] = UNFURL_UA;
+            req.headers["Accept"] = "text/html";
+            req.headers["Connection"] = "close";
+        },
+        (scope HTTPClientResponse res) {
+            status = res.statusCode;
+            body_ = cast(string) res.bodyReader.readAll();
+        }, settings);
+    if (status == 404) return Json(null);
+    if (status < 200 || status >= 300)
+        throw new Exception("klipy page answered " ~ status.to!string ~ " (unfurler allowlist changed?)");
+    return embedFromOpenGraph(body_, slug);
+}
+
 void handleKlipyEmbed(HTTPServerRequest req, HTTPServerResponse res) {
     if (!isAuthed(req)) {
         res.statusCode = 401;
@@ -157,12 +242,6 @@ void handleKlipyEmbed(HTTPServerRequest req, HTTPServerResponse res) {
         return;
     }
     const appKey = envSecret("IRCFIBER_KLIPY_APP_KEY");
-    if (!appKey.length) {
-        res.statusCode = 503;
-        res.headers["Cache-Control"] = "no-store";
-        res.writeJsonBody(Json(["error": Json("klipy embeds are not configured")]));
-        return;
-    }
 
     const now = Clock.currTime.toUnixTime!long;
     Json cached;
@@ -174,7 +253,7 @@ void handleKlipyEmbed(HTTPServerRequest req, HTTPServerResponse res) {
         }
     }
     if (!haveCached) {
-        try cached = resolve(appKey, slug);
+        try cached = appKey.length ? resolve(appKey, slug) : resolveViaOpenGraph(slug);
         catch (Exception e) {
             logWarn("klipy: resolving %s failed: %s", slug, e.msg);
             res.statusCode = 502;
