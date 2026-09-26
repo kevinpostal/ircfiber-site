@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tick } from 'svelte';
   import { proxiedImageUrl } from '../lib/imageInline';
   import { klipyEmbedUrl, type KlipyEmbed } from '../lib/klipyInline';
 
@@ -42,21 +41,9 @@
   const src = $derived(embed ? proxiedImageUrl((embed.webp ?? embed.gif)!.url) : '');
   const page = $derived(embed?.page ?? `https://klipy.com/gifs/${slug}`);
 
-  function snapToBottomIfNeeded(): void {
-    const c = document.getElementById('messages') as HTMLElement | null;
-    if (!c) return;
-    const dist = c.scrollHeight - c.clientHeight - c.scrollTop;
-    if (dist <= 300) {
-      c.scrollTop = c.scrollHeight;
-      requestAnimationFrame(() => { c.scrollTop = c.scrollHeight; });
-    }
-  }
-  async function onLoad(): Promise<void> {
+  function onLoad(): void {
     loaded = true;
     requestAnimationFrame(() => { if (imgEl) closeLeft = imgEl.clientWidth; });
-    await tick();
-    await new Promise<void>((r) => requestAnimationFrame(() => r()));
-    snapToBottomIfNeeded();
   }
   function onClose(e: MouseEvent): void {
     e.preventDefault();

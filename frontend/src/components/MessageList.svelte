@@ -390,8 +390,17 @@
     if (!container || resizing || batchRendering) return;
     const { scrollTop, scrollHeight } = container;
     if (scrollTop === lastScrollTop && scrollHeight === lastScrollHeight) return;
-    lastScrollTop = scrollTop;
     lastScrollHeight = scrollHeight;
+    if (scrollTop === lastScrollTop) {
+      // The viewport did not move; only the content height did. That is
+      // growth (WebKit lays out a decoded image before it dispatches
+      // `load`, so a silent pin's own delayed scroll event sees the taller
+      // content first), not a user scroll: re-pin if pinned instead of
+      // reading it as "scrolled up" and freezing the window.
+      onChange(cachedAtBottom);
+      return;
+    }
+    lastScrollTop = scrollTop;
     doScroll(userScrolled);
   }
 
@@ -461,6 +470,23 @@
     checkInfiniscroll();
   }
 
+  // iOS delivers touch-drag and momentum `scroll` events sparsely; a pin
+  // landing between two of them yanks the finger back to the bottom.
+  // While a touch is down, and for a grace window after it lifts (extended
+  // by every scroll event, so momentum keeps it alive), a pin is skipped
+  // when the list has MOVED since the last processed scroll / silent pin.
+  // (Measuring "at bottom" here is useless: onChange runs after the new
+  // rows are already in the DOM, so a pinned list is never at the bottom
+  // at this point; but content growing below never changes scrollTop.)
+  const TOUCH_GRACE_MS = 1200;   // covers a strong iOS flick's momentum
+  const TOUCH_SCROLL_EXTEND_MS = 300;
+  let touchDown = false;
+  let touchGraceUntil = 0;
+  function pinSuppressedByTouch(): boolean {
+    if (!container || !(touchDown || performance.now() < touchGraceUntil)) return false;
+    return Math.abs(container.scrollTop - lastScrollTop) > 1;
+  }
+
   // IRCCloud BufferScrollView.onChange(e): after any content change decide
   // whether to pin; bottomSeen (scrolled-up divider) always wins.
   function onChange(e?: boolean): void {
@@ -468,6 +494,7 @@
     const { networkId, bufferName } = ircState.activeBuffer;
     if (networkId && bufferName && getBottomSeen(networkId, bufferName) !== null) e = false;
     else if (e === undefined) e = cachedAtBottom;
+    if (e && pinSuppressedByTouch()) e = false;
     if (e) scrollToBottom({ silent: true });
     onScrollChange(!!e, false);
     checkInfiniscroll();
@@ -1097,13 +1124,27 @@
     });
   });
 
-  // Passive scroll listener (Svelte's onscroll compiles non-passive).
+  // Passive scroll + touch listeners (Svelte's onscroll compiles non-passive).
   $effect(() => {
     const el = container;
     if (!el) return;
-    const handler = () => onScroll(true);
+    const handler = () => {
+      // Momentum keeps the grace window open; a settled list lets it expire.
+      if (!touchDown && touchGraceUntil > performance.now()) touchGraceUntil = performance.now() + TOUCH_SCROLL_EXTEND_MS;
+      onScroll(true);
+    };
+    const onTouchStart = () => { touchDown = true; };
+    const onTouchEnd = () => { touchDown = false; touchGraceUntil = performance.now() + TOUCH_GRACE_MS; };
     el.addEventListener('scroll', handler, { passive: true });
-    return () => el.removeEventListener('scroll', handler);
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    el.addEventListener('touchcancel', onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', handler);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchend', onTouchEnd);
+      el.removeEventListener('touchcancel', onTouchEnd);
+    };
   });
 
   onMount(() => {
