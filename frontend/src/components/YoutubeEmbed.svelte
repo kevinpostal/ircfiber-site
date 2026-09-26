@@ -7,7 +7,7 @@
     YT_STATE_BUFFERING,
     type YtPlayerInfo,
   } from '../lib/youtubePlayerBridge';
-  import { mediaDock, dockVideo, closeDock } from '../stores/mediaDock.svelte';
+  import { mediaDock, dockVideo, closeDock, minimizeDock } from '../stores/mediaDock.svelte';
   import { ircState } from '../stores/ircStore.svelte';
 
   interface Props {
@@ -60,18 +60,26 @@
     dockHere();
   });
 
+  // stopPropagation on every control keeps the MessageRow click/selection
+  // handlers out of it, like the reaction buttons.
   function onClose(e: MouseEvent): void {
-    e.preventDefault();
+    e.stopPropagation();
     closed = true;
   }
 
   // Explicit pop-out works for paused / never-started videos too (start 0
   // when nothing has been reported yet). The dock URL carries autoplay=1,
-  // so a paused video resumes there; intended. stopPropagation keeps the
-  // MessageRow click/selection handlers out of it, like the reaction buttons.
+  // so a paused video resumes there; intended.
   function popOut(e: MouseEvent): void {
     e.stopPropagation();
     dockHere();
+  }
+
+  /** Straight to the taskbar chip: the dock mounts already hidden, playback continues there. */
+  function minimize(e: MouseEvent): void {
+    e.stopPropagation();
+    dockHere();
+    minimizeDock();
   }
 
   function returnHere(): void {
@@ -108,35 +116,36 @@
         referrerpolicy="strict-origin-when-cross-origin"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
       ></iframe>
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_consider_explicit_label -->
-      <a
-        href=""
-        class="embedClose"
-        title="Close video"
-        style="left: 416px;"
-        onclick={onClose}
-        role="button"
-        aria-label="Close video"
-      ></a>
-      <button
-        type="button"
-        class="embedPopout"
-        title="Play in mini player"
-        aria-label="Pop out video"
-        onclick={popOut}
-      >Pop out</button>
+      <span class="embedControls" role="group" aria-label="Video window controls">
+        <button
+          type="button"
+          class="embedControls__btn"
+          title="Minimize to taskbar"
+          aria-label="Minimize video"
+          onclick={minimize}
+        >&#8722;</button>
+        <button
+          type="button"
+          class="embedControls__btn"
+          title="Play in mini player"
+          aria-label="Pop out video"
+          onclick={popOut}
+        >&#9633;</button>
+        <button
+          type="button"
+          class="embedControls__btn embedControls__close"
+          title="Close video"
+          aria-label="Close video"
+          onclick={onClose}
+        >×</button>
+      </span>
     {/if}
   </span>
 {/if}
 
 <style>
-  :global(.directEmbedWrap) {
-    position: relative;
-    display: block;
-    margin: 6px 0 2px 0;
-    line-height: 0;
-  }
+  /* .directEmbedWrap / .embedClose (shared with image + GIF embeds) live in
+     styles/components/_embeds.scss. */
   :global(.directEmbedWrap.videoWrap) {
     max-width: 416px;
   }
@@ -146,69 +155,58 @@
     background: #000;
     max-width: 100%;
   }
-  /* IRCCloud exact: app/styles/main.scss — hidden off-screen, revealed
-     on hover at top:-7px, left from inline style="left:416px" centered with
-     margin-left:-12px, 24×24 sprite. */
-  :global(.embedClose) {
-    position: fixed;
-    top: -999px;
-    left: -999px;
-    width: 0;
-    height: 0;
-    overflow: hidden;
-    background: transparent url('../assets/embed_close.png') no-repeat 0 0;
-    background-size: 24px 50px;
-    border: 0;
-    z-index: 3;
-  }
-  :global(.directEmbedWrap:hover .embedClose),
-  :global(.directEmbedWrap:focus .embedClose),
-  :global(.embedClose:hover),
-  :global(.embedClose:focus) {
-    position: absolute;
-    top: -7px;
-    width: 24px;
-    height: 24px;
-    margin-left: -12px;
-    overflow: visible;
-  }
-  :global(.embedClose:hover),
-  :global(.embedClose:focus) {
-    background-position: 0 -25px;
-  }
-  /* Pop-out pill over the player's top-left corner. Absolutely positioned
-     so the wrapper's height never changes (MessageList observes it), and
-     hover-revealed via opacity — never visibility/off-screen — so the
-     button keeps a real box and stays clickable and focusable. */
-  .embedPopout {
+  /* Window controls (minimize · pop out · close) over the player's top-right
+     corner, desktop-title-bar order. Absolutely positioned so the wrapper's
+     height never changes (MessageList observes it), and hover-revealed via
+     opacity — never visibility/off-screen — so the buttons keep a real box
+     and stay clickable and focusable. */
+  .embedControls {
     position: absolute;
     top: 6px;
-    left: 6px;
+    right: 6px;
     z-index: 3;
-    margin: 0;
-    padding: 3px 8px;
-    border: 0;
-    border-radius: 10px;
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 6px;
     background: rgba(0, 0, 0, 0.65);
-    color: #fff;
-    font-family: inherit;
-    font-size: 11px;
-    font-weight: 600;
     line-height: 1;
-    white-space: nowrap;
-    cursor: pointer;
     opacity: 0;
   }
-  :global(.directEmbedWrap:hover) .embedPopout,
-  .embedPopout:focus-visible {
+  :global(.directEmbedWrap:hover) .embedControls,
+  .embedControls:focus-within {
     opacity: 1;
   }
-  .embedPopout:focus-visible {
+  .embedControls__btn {
+    width: 24px;
+    height: 20px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #e5e7eb;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .embedControls__btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+  }
+  .embedControls__close {
+    font-size: 16px;
+  }
+  .embedControls__close:hover {
+    background: #e5484d;
+  }
+  .embedControls__btn:focus-visible {
     outline: 1px solid #4a6fa5;
     outline-offset: 1px;
   }
   @media (hover: none) {
-    .embedPopout {
+    .embedControls {
       opacity: 1;
     }
   }

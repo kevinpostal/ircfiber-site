@@ -3,8 +3,10 @@ import { render } from 'vitest-browser-svelte';
 import { page } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import YoutubeEmbed from './YoutubeEmbed.svelte';
-import { mediaDock, dockVideo, reportDockPosition } from '../stores/mediaDock.svelte';
+import { mediaDock, closeDock, dockVideo, reportDockPosition } from '../stores/mediaDock.svelte';
 import { ircState } from '../stores/ircStore.svelte';
+// .directEmbedWrap's position: relative (the controls' containing block) lives here.
+import '../styles/components/_embeds.scss';
 
 const ID = 'sHuu-kKD0Lc';
 
@@ -28,7 +30,7 @@ function renderEmbed() {
 
 describe('YoutubeEmbed mini-player handoff', () => {
   beforeEach(() => {
-    mediaDock.video = null;
+    closeDock();
   });
 
   it('docks a playing video on unmount, at the floored reported position', () => {
@@ -90,5 +92,40 @@ describe('YoutubeEmbed mini-player handoff', () => {
     await page.getByRole('button', { name: 'Pop out video' }).click();
     flushSync();
     expect(mediaDock.video?.origin).toEqual({ networkId: 'net1', bufferName: '#chan' });
+  });
+
+  it('Minimize docks the video straight into the taskbar (minimized) at its position', async () => {
+    const { iframe } = renderEmbed();
+    fakeInfo(iframe, { currentTime: 7.9, playerState: 1 });
+    await page.getByRole('button', { name: 'Minimize video' }).click();
+    flushSync();
+    expect(mediaDock.video).toEqual({ videoId: ID, startSeconds: 7, positionSeconds: 7, origin: null });
+    expect(mediaDock.minimized).toBe(true);
+    await expect.element(page.getByRole('button', { name: 'Bring back here' })).toBeInTheDocument();
+  });
+
+  it('window controls sit together at the top-right in minimize · pop out · close order', () => {
+    const { iframe } = renderEmbed();
+    const group = document.querySelector<HTMLElement>('.embedControls');
+    if (!group) throw new Error('controls did not render');
+    expect([...group.querySelectorAll('button')].map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Minimize video',
+      'Pop out video',
+      'Close video',
+    ]);
+    const g = group.getBoundingClientRect();
+    const f = iframe.getBoundingClientRect();
+    expect(f.right - g.right).toBeGreaterThanOrEqual(0);
+    expect(f.right - g.right).toBeLessThanOrEqual(12);
+    expect(g.top - f.top).toBeGreaterThanOrEqual(0);
+    expect(g.top - f.top).toBeLessThanOrEqual(12);
+  });
+
+  it('Close hides the embed without touching the dock', async () => {
+    renderEmbed();
+    await page.getByRole('button', { name: 'Close video' }).click();
+    flushSync();
+    expect(document.querySelector('.directEmbedWrap')).toBeNull();
+    expect(mediaDock.video).toBeNull();
   });
 });

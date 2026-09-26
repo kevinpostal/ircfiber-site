@@ -122,35 +122,6 @@
   :global(.directEmbedWrap.imageWrap img.imageRendered) {
     display: inline-block;
   }
-  /* Close button — same sprite as YoutubeEmbed, reuse global .embedClose rules.
-     Ensure standalone definition if YoutubeEmbed not mounted in this view. */
-  :global(.directEmbedWrap.imageWrap .embedClose) {
-    position: fixed;
-    top: -999px;
-    left: -999px;
-    width: 0;
-    height: 0;
-    overflow: hidden;
-    background: transparent url('../assets/embed_close.png') no-repeat 0 0;
-    background-size: 24px 50px;
-    border: 0;
-    z-index: 3;
-  }
-  :global(.directEmbedWrap.imageWrap:hover .embedClose),
-  :global(.directEmbedWrap.imageWrap:focus .embedClose),
-  :global(.directEmbedWrap.imageWrap .embedClose:hover),
-  :global(.directEmbedWrap.imageWrap .embedClose:focus) {
-    position: absolute;
-    top: -7px;
-    width: 24px;
-    height: 24px;
-    margin-left: -12px;
-    overflow: visible;
-  }
-  :global(.directEmbedWrap.imageWrap .embedClose:hover),
-  :global(.directEmbedWrap.imageWrap .embedClose:focus) {
-    background-position: 0 -25px;
-  }
   @media (max-width: 480px) {
     :global(.directEmbedWrap.imageWrap img.image) {
       max-width: 100% !important;
