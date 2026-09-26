@@ -16,6 +16,7 @@
   import ImageInline from './ImageInline.svelte';
   import KlipyInline from './KlipyInline.svelte';
   import TextInline from './TextInline.svelte';
+  import ServicesBadge from './ServicesBadge.svelte';
   import { extractImageUrlsFromText } from '../lib/imageInline';
   import { extractKlipySlugsFromText } from '../lib/klipyInline';
   import { extractTextUrlsFromText } from '../lib/textInline';
@@ -128,6 +129,14 @@
   function getModeForNick(n: string): string {
     if (msg.fromMode) return msg.fromMode;
     return findMemberForNick(n)?.prefix ?? '';
+  }
+
+  /// Services account for the badge: the account-tag stamped on the
+  /// message wins (survives quit/rename), roster is the fallback for rows
+  /// stored before Redis scrollback kept `a`.
+  function getAccountForNick(n: string): string {
+    if (msg.account && msg.account !== '*') return msg.account;
+    return findMemberForNick(n)?.account ?? '';
   }
 
   /** Roster lookup by raw nick first, then by the formatting-free spelling
@@ -811,11 +820,13 @@
         {@const member = findMemberForNick(nick)}
         {@const sensibleRealname = getSensibleRealname(member?.realname || networkRealname)}
         {@const botFlag = isBotNick(nick, member, msg.prefix)}
+        {@const account = getAccountForNick(nick)}
         <span translate="no" class="authorWrap">
           <span class="g" aria-hidden="true">&lt;</span>
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <span role="button" tabindex="0" class="buffer bufferLink author {colorCls} {modeInfo ? 'moded ' + modeInfo.cls : ''} user hasUserParent link"
                 title={authorTitle} onclick={handleNickClick} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNickClick?.(nick, e as any); } }}>{#if modePrefix && modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}{@html parseIrcFormatting(nick)}</span>
+          <ServicesBadge {account} />
           <span class="g" aria-hidden="true">&gt;</span>
           {#if sensibleRealname}
             <span class="author-realname">{sensibleRealname}</span>
@@ -848,6 +859,7 @@
         {@const usermask = getUsermask(msg.prefix || '')}
         {@const authorTitle = usermask ? `${plainNick(nick)} (${usermask})` : plainNick(nick)}
         {@const botFlag = isBotNick(nick, member, msg.prefix)}
+        {@const account = getAccountForNick(nick)}
         {@const actionText = msg.text || ''}
         <!--
           IRCCloud puts the avatar, me-dash, mode prefixes, author and BOT
@@ -861,7 +873,7 @@
             <span role="presentation">{initial}</span>
           </span><span class="me_prefix">&mdash;</span>&nbsp;{#if modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events
           --><span role="button" tabindex="0" class="buffer bufferLink author {colorCls} {modeInfo ? 'moded ' + modeInfo.cls : ''} user hasUserParent link"
-                title={authorTitle} onclick={handleNickClick}>{@html parseIrcFormatting(nick)}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || klipySlugs.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each klipySlugs as ks (ks)}<KlipyInline slug={ks} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}
+                title={authorTitle} onclick={handleNickClick}>{@html parseIrcFormatting(nick)}</span><ServicesBadge {account} />&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || klipySlugs.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each klipySlugs as ks (ks)}<KlipyInline slug={ks} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}
         </span>
       {:else if chatContent}
         <span translate="no" class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} />{#if msg.edited && !isSystem}<span class="edited" title="edited"> (edited)</span>{/if}{#if youtubeIds.length > 0 || imageUrls.length > 0 || klipySlugs.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each klipySlugs as ks (ks)}<KlipyInline slug={ks} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}</span>

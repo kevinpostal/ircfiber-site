@@ -3157,7 +3157,7 @@ function enrichMembersFromSync(
     const bare = stripPrefix(m.nick);
     if (caches.accounts && !m.account) {
       const acct = findCI(caches.accounts, m.nick) ?? findCI(caches.accounts, bare);
-      if (acct) m.account = acct;
+      if (acct && acct !== '*') m.account = acct;
     }
     if (caches.idents && (!m.ident || !m.host)) {
       const id = findCI(caches.idents, m.nick) ?? findCI(caches.idents, bare);

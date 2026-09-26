@@ -4,6 +4,7 @@
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import type { ModeCategory, Member } from '../types';
   import { getShowMemberPrefixes } from '../stores/preferences.svelte';
+  import ServicesBadge from './ServicesBadge.svelte';
 
   interface Props {
     onNickClick?: (nick: string, event: MouseEvent, member?: Member | null) => void;
@@ -110,6 +111,7 @@
                   <span class="member-mode-prefix" aria-hidden="true">{sym}</span>
                 {/if}
                 <span class="member-nick">{@html parseIrcFormatting(nick)}</span>
+                <ServicesBadge account={member.account} />
                 {#if member.isBot}<span class="member-bot" title="Bot">BOT</span>{/if}
               </button>
             </li>

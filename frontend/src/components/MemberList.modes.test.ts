@@ -197,3 +197,29 @@ describe('MemberList realtime mode updates', () => {
     expect(sectionHas('members', 'Zodiac')).toBe(true);
   });
 });
+
+describe('MemberList services badge', () => {
+  beforeEach(() => {
+    ircState.networks.length = 0;
+    ircState.activeBuffer.networkId = null;
+    ircState.activeBuffer.bufferName = null;
+    ircState.messages = {};
+    clearPendingModeChanges();
+  });
+
+  it('shows the services badge for a member identified to NickServ', () => {
+    seedBob(createMember({ nick: 'bob', account: 'bob' }));
+    render(MemberList);
+
+    expect(
+      document.querySelector('.member-item .services-badge[title="Registered with services as bob"]'),
+    ).not.toBeNull();
+  });
+
+  it('shows no services badge for an unidentified member', () => {
+    seedBob(createMember({ nick: 'bob', account: '' }));
+    render(MemberList);
+
+    expect(document.querySelector('.member-item .services-badge')).toBeNull();
+  });
+});

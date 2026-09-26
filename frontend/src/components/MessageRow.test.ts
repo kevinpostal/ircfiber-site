@@ -396,6 +396,37 @@ describe('MessageRow', () => {
 		expect(document.querySelector('.authorWrap .mode_prefix.mode_symbol')?.textContent).toBe('@');
 	});
 
+	it('renders the services badge from the message account-tag', async () => {
+		const msg = createMessage({ nick: 'octo', text: 'hi', account: 'octo' });
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.authorWrap .services-badge')?.getAttribute('title'))
+			.toBe('Registered with services as octo');
+	});
+
+	it('falls back to the roster account for rows stored without account-tag', async () => {
+		const msg = createMessage({ nick: 'alice', text: 'legacy row' });
+		const member = createMember({ nick: 'alice', account: 'alice' });
+		render(MessageRow, { props: { msg, memberByNick: new Map([['alice', member]]) } });
+
+		expect(document.querySelector('.authorWrap .services-badge')?.getAttribute('title'))
+			.toBe('Registered with services as alice');
+	});
+
+	it('renders no services badge when the author is not identified', async () => {
+		const msg = createMessage({ nick: 'alice', text: 'anon' });
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.services-badge')).toBeNull();
+	});
+
+	it('treats the logged-out account-tag "*" as no account', async () => {
+		const msg = createMessage({ nick: 'alice', text: 'logged out', account: '*' });
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.services-badge')).toBeNull();
+	});
+
 	it('renders an @nick mention as one clickable chip', async () => {
 		const onNickClick = vi.fn();
 		const msg = createMessage({ nick: 'alice', text: '@zodiac chipping in' });

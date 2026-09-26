@@ -854,6 +854,30 @@ describe('updateNetworkFromSync', () => {
 		expect(bob.ident).toBe('bob_ident');
 	});
 
+	it('never adopts the logged-out "*" account marker from the sync cache', () => {
+		// The engine's `accounts` map stores `*` for users that extended-join
+		// / ACCOUNT reported as logged out; the frontend must keep the member
+		// account empty so no services badge or "Registered as *" renders.
+		const existing = createNetwork({ networkId: 'net1' });
+		existing.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+		const buf = createBuffer({ name: '#chan', isJoined: true });
+		buf.users = [createMember({ nick: 'bob', prefix: '', category: 'MEMBER', account: '' })];
+		existing.buffers.push(buf);
+		ircState.networks.push(existing);
+
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+		const incomingBuf = createBuffer({ name: '#chan', isJoined: true });
+		incomingBuf.users = ['bob'] as unknown as Member[];
+		incoming.buffers.push(incomingBuf);
+		(incoming as SyncNetwork).accounts = { bob: '*' };
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const foundBuf = ircState.networks.find((n) => n.networkId === 'net1')!.buffers.find((b) => b.name === '#chan')!;
+		expect(foundBuf.users.find((u) => stripPrefix(u.nick) === 'bob')!.account).toBe('');
+	});
+
 	it('adopts the server lastSeen only when it is newer (advance-only)', () => {
 		const existing = createNetwork({ networkId: 'net1' });
 		const buf = createBuffer({ name: '#chan', unseen: true });

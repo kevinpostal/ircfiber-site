@@ -5,6 +5,7 @@
   import { getAvatarColor, stripPrefix, plainNick } from '../lib/utils';
   import { MODE_PREFIX_MAP } from '../types';
   import type { Member, ModeCategory, WhoisData } from '../types';
+  import ServicesBadge from './ServicesBadge.svelte';
 
   interface Props {
     nick: string;
@@ -277,7 +278,7 @@
         <p class="info hostmask">{ident}</p>
       {/if}
       {#if account}
-        <p class="info account authed"><b>{account}</b></p>
+        <p class="info account authed"><ServicesBadge {account} /> Registered with services as <b>{account}</b></p>
       {/if}
       {#if isAway}
         <p class="info away">{awayMessage || 'Away'}</p>
